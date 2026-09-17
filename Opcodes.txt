@@ -1,0 +1,134 @@
+Computador Hipotético - Arduino Nano
+8bits de endereço e 8 bits de dados.
+256 bytes de memoria. Dados/Programas.
+Registradores: A, B
+
+Painel:
+
+A A A A A A A A
+D D D D D D D D
+B B B B B B B B
+
+Leds de flags + Halt
+N, Z, C, V
+
+S - Leds de saida (OUTA)
+S S S S S S S S
+
+
+A - Leds de endereço 
+D - Leds de dados
+B - Push buttons (usado para inserir um byte de programa e tbm em (INA, KEY)
+
+
+
+// ============================================================
+// OPCODES
+// ============================================================
+
+// SYSTEM
+00 | NOP
+01 | HALT 
+
+// LD
+10 | LDA [addr]  = A <- MEM[addr]
+11 | LDA #value  = A <- value
+12 | LDB [addr]  = B <- MEM[addr]
+13 | LDB #value  = B <- value
+14 | LDA [B]     = A <- MEM[B]
+
+
+// STA
+20 | STA [addr]  = MEM[addr] <- A
+21 | STA [B]     = MEM[B] <- A
+22 | STB [addr]  = MEM[addr] <- B
+
+// MOV
+30 | MOV A,B  = B <- A
+31 | MOV B,A  = A <- B
+32 | SWAP     = A <-> B
+
+// ADD
+40 | ADD B       = A <- A + B
+41 | ADD [addr]  = A <- A + MEM[addr]
+42 | ADD #valeu  = A <- A + value
+
+// SUB
+50 | SUB B       = A <- A - B 
+51 | SUB [addr]  = A <- A - MEM[addr]
+52 | SUB #value  = A <- A - value
+
+// LOGIC
+60 | OR B  = A <- A OR B
+61 | OR [addr] = A <- A OR MEM[addr]
+
+62 | AND B       = A <- A AND B 
+63 | AND [addr]  = A <- A AND MEN[addr]
+ 
+64 | XOR B       = A <- A XOR B 
+65 | XOR [addr]  = A <- A XOR MEM[addr]
+66 | XOR #value  = A <- A XOR value
+
+67 | NOT A  = A <- NOT A
+68 | NOT B  = B <- NOT B
+
+69 | AND #value  = A <- A AND value
+6A | OR  #value  = A <- A OR value
+
+// COMPARE
+70 | CP B       = FLAGS <- compare A, B
+71 | CP [addr]  = FLAGS <- compare A, MEM[addr]
+72 | CP #value  = FLAGS <- compare A,value
+
+// INC / DEC
+80 | INC A  = A <- A + 1
+81 | DEC A  = A <- A - 1
+82 | INC B  = B <- B + 1
+83 | DEC B  = B <- B - 1
+84 | INC [addr]  = MEM[addr] <- MEM[addr] + 1
+85 | DEC [addr]  = MEM[addr] <- MEM[addr] - 1
+
+
+// JUMP
+90 | JP  [addr]  = PC <- addr
+91 | JPZ [addr]  = PC <- addr if Z = 1
+92 | JPNZ[addr]  = PC <- addr if Z = 0
+
+93 | JPC [addr]  = PC <- addr if C = 1
+94 | JPNC[addr]  = PC <- addr if C = 0
+
+95 | JPN [addr]  = PC <- addr if N = 1
+96 | JNN [addr]  = PC <- addr if N = 0
+
+97 | JPV [addr]  = PC <- addr if V = 1
+98 | JPNV[addr]  = PC <- addr if V = 0
+
+
+// SUBROTINAS
+D0 | CALL [addr]  = MEM[$FF] <- PC ; PC <- addr
+D1 | RET          = PC <- MEM[$FF]
+     ($FF é o endereço reservado para o retorno; só 1 nível de chamada)
+
+
+// SHIFT / ROTATE
+A0 | SHL A  = A <- A << 1
+A1 | SHR A  = A <- A >> 1
+A2 | ROL A  = A <- rotate-left(A)
+A3 | ROR A  = A <- rotate-right(A)
+
+A4 | SHL B  = B <- B << 1
+A5 | SHR B  = B <- B >> 1
+A6 | ROL B  = B <- rotate-left(B)
+A7 | ROR B  = B <- rotate-right(B)
+
+
+// I/O
+B0 | INA   = A <- INPUT WAIT
+B1 | OUTA  = OUTPUT <- A
+B2 | KEY   = A <- INPUT
+
+
+// MISC
+C0 | RNDA   = A <- RANDOM 0-255
+C1 | DLAYA  = delay(A * 1ms)
+C2 | DLAYB  = delay(B * 1ms)

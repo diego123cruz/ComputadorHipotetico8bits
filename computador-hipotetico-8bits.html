@@ -1,0 +1,1154 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Computador Hipotético · 8 bits — Assembler &amp; Emulador</title>
+<style>
+  :root{
+    --bg:#0a100c;
+    --board:#132a1d;
+    --board-2:#0e2016;
+    --ink:#dff3e6;
+    --muted:#71917c;
+    --line:#234a34;
+    --amber:#ffb400;
+    --green:#39ff7a;
+    --red:#ff4444;
+    --purple:#e14bff;
+    --mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Consolas, "SFMono-Regular", Menlo, monospace;
+    --sans: "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:var(--sans);
+    min-height:100vh;
+    padding:18px;
+  }
+  h1,h2,h3{font-family:var(--sans); font-weight:700; margin:0 0 4px;}
+  h1{font-size:1.3rem; letter-spacing:.02em;}
+  h2{font-size:.95rem; color:var(--muted); font-weight:600; text-transform:none;}
+  .tag{
+    display:inline-block; font-family:var(--mono); font-size:.68rem;
+    color:var(--muted); border:1px solid var(--line); border-radius:3px;
+    padding:1px 6px; margin-left:8px; vertical-align:middle;
+  }
+  header{
+    max-width:1400px; margin:0 auto 16px; display:flex; align-items:baseline;
+    gap:8px; flex-wrap:wrap; border-bottom:1px solid var(--line); padding-bottom:12px;
+  }
+  header p{margin:2px 0 0; color:var(--muted); font-size:.85rem; max-width:60ch;}
+  .wrap{max-width:1400px; margin:0 auto;}
+  .grid{
+    display:grid;
+    grid-template-columns: minmax(340px, 1fr) minmax(360px, 1fr) minmax(300px, .9fr);
+    gap:16px;
+    align-items:start;
+  }
+  @media (max-width: 1050px){
+    .grid{grid-template-columns: 1fr;}
+  }
+  .card{
+    background:var(--board);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:14px;
+  }
+  /* ---------- editor ---------- */
+  textarea#asmSource{
+    width:100%; min-height:360px; resize:vertical;
+    background:#081911; color:var(--green); font-family:var(--mono);
+    font-size:.82rem; line-height:1.5; border:1px solid var(--line);
+    border-radius:6px; padding:10px; tab-size:4;
+  }
+  .toolbar{display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;}
+  select, button{
+    font-family:var(--sans); font-size:.8rem; color:var(--ink);
+    background:#183826; border:1px solid var(--line); border-radius:5px;
+    padding:6px 10px; cursor:pointer;
+  }
+  button:hover:not(:disabled){border-color:var(--amber); color:var(--amber);}
+  button:disabled{opacity:.35; cursor:not-allowed;}
+  button.primary{background:#1f5236; border-color:#2f7d4f; color:#eaffef; font-weight:600;}
+  button.primary:hover:not(:disabled){border-color:var(--green); color:var(--green);}
+  .errors{
+    margin-top:10px; font-family:var(--mono); font-size:.78rem; color:var(--red);
+    white-space:pre-wrap; min-height:1.2em;
+  }
+  details{margin-top:10px; border-top:1px dashed var(--line); padding-top:8px;}
+  summary{cursor:pointer; font-size:.8rem; color:var(--muted);}
+  #hexDump, #refBox{
+    font-family:var(--mono); font-size:.72rem; color:var(--ink);
+    white-space:pre-wrap; word-break:break-all; margin-top:8px; color:var(--muted);
+  }
+  /* ---------- panel ---------- */
+  .led-block{margin-bottom:14px;}
+  .led-block .lbl{
+    font-family:var(--mono); font-size:.68rem; color:var(--muted); margin-bottom:5px;
+    display:flex; justify-content:space-between;
+  }
+  .led-row{display:flex; gap:6px;}
+  .led{
+    width:26px; height:26px; border-radius:50%; flex:0 0 auto;
+    background:#0d130f; border:1px solid #000; position:relative;
+    box-shadow: inset 0 2px 3px rgba(0,0,0,.6);
+  }
+  .led span{
+    position:absolute; bottom:-15px; left:50%; transform:translateX(-50%);
+    font-family:var(--mono); font-size:.55rem; color:var(--muted); white-space:nowrap;
+  }
+  .led.amber.on{background:var(--amber); box-shadow:0 0 10px 3px var(--amber);}
+  .led.green.on{background:var(--green); box-shadow:0 0 10px 3px var(--green);}
+  .led.red.on{background:var(--red); box-shadow:0 0 10px 3px var(--red);}
+  .led.purple.on{background:var(--purple); box-shadow:0 0 10px 3px var(--purple);}
+  .ctrl-row{display:flex; gap:6px; flex-wrap:wrap;}
+  .ctrl-row .led{width:20px;height:20px;}
+  .ctrl-row .led span{bottom:-14px; font-size:.5rem;}
+  .switches{display:flex; gap:6px; margin:22px 0 10px;}
+  .sw{
+    width:26px; height:44px; border-radius:5px; background:#081911;
+    border:1px solid var(--line); position:relative; cursor:pointer;
+  }
+  .sw .knob{
+    position:absolute; left:2px; right:2px; height:18px; border-radius:4px;
+    background:#3a5548; top:2px; transition:top .1s;
+  }
+  .sw.on .knob{top:22px; background:var(--green); box-shadow:0 0 6px var(--green);}
+  .sw span{
+    position:absolute; bottom:-16px; left:50%; transform:translateX(-50%);
+    font-family:var(--mono); font-size:.55rem; color:var(--muted);
+  }
+  .controls{display:flex; flex-wrap:wrap; gap:8px; margin-top:26px;}
+  .controls button{min-width:64px;}
+  #btnRun.active{background:#5c1414; border-color:var(--red); color:#ffdada;}
+  .speedRow{display:flex; align-items:center; gap:8px; margin-top:12px; font-size:.75rem; color:var(--muted);}
+  .speedRow input{flex:1;}
+  .readout{
+    display:flex; gap:14px; flex-wrap:wrap; margin-top:14px; padding-top:10px;
+    border-top:1px dashed var(--line); font-family:var(--mono); font-size:.75rem;
+  }
+  .readout div span.k{color:var(--muted); display:block; font-size:.62rem;}
+  .readout div span.v{color:var(--ink); font-size:.95rem;}
+  .flag-word{color:var(--muted);}
+  .flag-word b{color:var(--amber); font-weight:700;}
+  /* ---------- memory ---------- */
+  .mem-grid{
+    display:grid; grid-template-columns: 34px repeat(16, 1fr);
+    gap:2px; font-family:var(--mono); font-size:.62rem;
+  }
+  .mem-grid .hdr{color:var(--muted); text-align:center; padding-bottom:3px;}
+  .mem-grid .rowlbl{color:var(--muted); display:flex; align-items:center;}
+  .mem-cell{
+    background:#0d1f15; text-align:center; padding:3px 0; border-radius:2px;
+    color:var(--muted); cursor:pointer; border:1px solid transparent;
+  }
+  .mem-cell:hover{border-color:var(--amber); color:var(--amber);}
+  .mem-cell.pc{background:#2c220a; color:var(--amber); border-color:var(--amber); font-weight:700;}
+  .mem-cell.nz{color:var(--ink);}
+  footer{max-width:1400px; margin:22px auto 0; color:var(--muted); font-size:.72rem; text-align:center;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Computador Hipotético · 8 bits<span class="tag">assembler + emulador</span></h1>
+  <p>Arquivo único, sem internet e sem instalação — monte, rode e depure programas para o seu computador de LEDs e botões direto no navegador, em qualquer PC ou celular.</p>
+</header>
+
+<div class="wrap">
+<div class="grid">
+
+  <!-- ================= EDITOR ================= -->
+  <section class="card" id="editorCard">
+    <h2>Código-fonte (assembly)</h2>
+    <textarea id="asmSource" spellcheck="false"></textarea>
+    <div class="toolbar">
+      <button class="primary" id="btnAssemble">Montar (Ctrl+Enter)</button>
+      <select id="exampleSelect">
+        <option value="">— carregar exemplo —</option>
+        <option value="contador">Contador binário</option>
+        <option value="reflexo">Jogo do reflexo</option>
+        <option value="adivinha">Adivinhe o número</option>
+        <option value="vazio">Programa vazio</option>
+      </select>
+      <button id="btnOpen">Abrir .asm</button>
+      <button id="btnSave">Salvar .asm</button>
+      <input type="file" id="fileInput" accept=".asm,.txt" hidden>
+    </div>
+    <pre class="errors" id="asmErrors"></pre>
+    <details>
+      <summary>Bytes montados (hex)</summary>
+      <pre id="hexDump">— monte um programa para ver os bytes —</pre>
+    </details>
+    <details>
+      <summary>Referência rápida de opcodes</summary>
+      <div id="refBox"></div>
+    </details>
+  </section>
+
+  <!-- ================= PAINEL ================= -->
+  <section class="card" id="panelCard">
+    <h2>Painel</h2>
+
+    <div class="led-block">
+      <div class="lbl"><span>ENDEREÇO (Addr)</span><span id="addrHex">0x00</span></div>
+      <div class="led-row" id="ledsAddr"></div>
+    </div>
+    <br>
+    <div class="led-block">
+      <div class="lbl"><span>DADOS (Data)</span><span id="dataHex">0x00</span></div>
+      <div class="led-row" id="ledsData"></div>
+    </div>
+    <br>
+    <div class="led-block">
+      <div class="lbl"><span>CONTROLE / FLAGS</span><span></span></div>
+      <div class="ctrl-row" id="ledsCtrl"></div>
+    </div>
+    <br>
+    <div class="led-block">
+      <div class="lbl"><span>SAÍDA (OUTA)</span><span id="outHex">0x00</span></div>
+      <div class="led-row" id="ledsOut"></div>
+    </div>
+    <div class="switches" id="switches"></div>
+
+    <div class="controls">
+      <button id="btnIncr">INCR</button>
+      <button id="btnClr">CLR</button>
+      <button id="btnRun">RUN/STOP</button>
+      <button id="btnAddr">ADDR</button>
+      <button id="btnStep">STEP</button>
+    </div>
+    <br>
+    <div class="controls">
+      <button id="btnReset">RESET</button>
+      <button id="btnWipe">Limpar memória</button>
+    </div>
+
+    <div class="speedRow">
+      <span>Velocidade</span>
+      <input type="range" id="speed" min="1" max="100" value="8">
+      <span id="speedLbl">8 instr/s</span>
+    </div>
+
+    <div class="readout">
+      <div><span class="k">A</span><span class="v" id="regA">0x00</span></div>
+      <div><span class="k">B</span><span class="v" id="regB">0x00</span></div>
+      <div><span class="k">PC</span><span class="v" id="regPC">0x00</span></div>
+      <div><span class="k">estado</span><span class="v" id="regState">NONE</span></div>
+      <div><span class="k">instrução atual</span><span class="v" id="regInstr">—</span></div>
+    </div>
+  </section>
+
+  <!-- ================= MEMÓRIA ================= -->
+  <section class="card" id="memCard">
+    <h2>Memória (256 bytes) <span class="tag">clique numa célula p/ editar</span></h2>
+    <div class="mem-grid" id="memGrid"></div>
+  </section>
+
+</div>
+</div>
+
+<footer>Computador Hipotético 8 bits — assembler e emulador rodando localmente no seu navegador.</footer>
+
+<script>
+"use strict";
+
+/* ============================================================
+   TABELA DE OPCODES
+   ============================================================ */
+const SIMPLE = { NOP:0x00, HALT:0x01, SWAP:0x32, INA:0xB0, OUTA:0xB1, KEY:0xB2, RNDA:0xC0, DLAYA:0xC1, DLAYB:0xC2, RET:0xD1 };
+const REGOPS = {
+  NOT:{A:0x67,B:0x68}, INC:{A:0x80,B:0x82}, DEC:{A:0x81,B:0x83},
+  SHL:{A:0xA0,B:0xA4}, SHR:{A:0xA1,B:0xA5}, ROL:{A:0xA2,B:0xA6}, ROR:{A:0xA3,B:0xA7}
+};
+const JUMPOPS = { JP:0x90, JPZ:0x91, JPNZ:0x92, JPC:0x93, JPNC:0x94, JPN:0x95, JNN:0x96, JPV:0x97, JPNV:0x98 };
+const OPVALUE = {
+  LDA:{mem:0x10, imm:0x11, memb:0x14}, LDB:{mem:0x12, imm:0x13},
+  STA:{mem:0x20, memb:0x21}, STB:{mem:0x22},
+  ADD:{b:0x40, mem:0x41, imm:0x42}, SUB:{b:0x50, mem:0x51, imm:0x52},
+  OR:{b:0x60, mem:0x61, imm:0x6A}, AND:{b:0x62, mem:0x63, imm:0x69}, XOR:{b:0x64, mem:0x65, imm:0x66},
+  CP:{b:0x70, mem:0x71, imm:0x72}
+};
+
+const DISASM = {
+  0x00:'NOP',0x01:'HALT',0x10:'LDA [addr]',0x11:'LDA #imm',0x12:'LDB [addr]',0x13:'LDB #imm',0x14:'LDA [B]',
+  0x20:'STA [addr]',0x21:'STA [B]',0x22:'STB [addr]',0x30:'MOV A,B',0x31:'MOV B,A',0x32:'SWAP',
+  0x40:'ADD B',0x41:'ADD [addr]',0x42:'ADD #imm',0x50:'SUB B',0x51:'SUB [addr]',0x52:'SUB #imm',
+  0x60:'OR B',0x61:'OR [addr]',0x62:'AND B',0x63:'AND [addr]',0x69:'AND #imm',0x6A:'OR #imm',
+  0x64:'XOR B',0x65:'XOR [addr]',0x66:'XOR #imm',0x67:'NOT A',0x68:'NOT B',
+  0x70:'CP B',0x71:'CP [addr]',0x72:'CP #imm',
+  0x80:'INC A',0x81:'DEC A',0x82:'INC B',0x83:'DEC B',0x84:'INC [addr]',0x85:'DEC [addr]',
+  0x90:'JP',0x91:'JPZ',0x92:'JPNZ',0x93:'JPC',0x94:'JPNC',0x95:'JPN',0x96:'JNN',0x97:'JPV',0x98:'JPNV',
+  0xA0:'SHL A',0xA1:'SHR A',0xA2:'ROL A',0xA3:'ROR A',0xA4:'SHL B',0xA5:'SHR B',0xA6:'ROL B',0xA7:'ROR B',
+  0xB0:'INA',0xB1:'OUTA',0xB2:'KEY',0xC0:'RNDA',0xC1:'DLAYA',0xC2:'DLAYB',
+  0xD0:'CALL',0xD1:'RET'
+};
+const HAS_OPERAND = new Set([0x10,0x11,0x12,0x13,0x20,0x22,0x41,0x42,0x51,0x52,0x61,0x63,0x65,0x66,0x69,0x6A,0x71,0x72,
+  0x84,0x85,0x90,0x91,0x92,0x93,0x94,0x95,0x96,0x97,0x98,0xD0]);
+const RET_ADDR = 0xFF; // endereço reservado para o retorno de CALL/RET
+
+/* ============================================================
+   ASSEMBLER
+   ============================================================ */
+function parseOperandExpr(s){
+  s = s.trim();
+  if(s.startsWith('#')) return {mode:'imm', expr:s.slice(1).trim()};
+  if(s.startsWith('[') && s.endsWith(']')) return {mode:'mem', expr:s.slice(1,-1).trim()};
+  return {mode:'bare', expr:s};
+}
+
+function resolveValue(expr, symtab){
+  expr = expr.trim();
+  let m = expr.match(/^\$([0-9A-Fa-f]+)$/);
+  if(m) return parseInt(m[1],16);
+  m = expr.match(/^0x([0-9A-Fa-f]+)$/i);
+  if(m) return parseInt(m[1],16);
+  if(/^-?\d+$/.test(expr)) return parseInt(expr,10);
+  if(Object.prototype.hasOwnProperty.call(symtab, expr)) return symtab[expr];
+  const found = Object.keys(symtab).find(k => k.toLowerCase() === expr.toLowerCase());
+  if(found !== undefined) return symtab[found];
+  throw new Error('símbolo/valor desconhecido "' + expr + '"');
+}
+
+function sizeAndEncode(mnemonic, operandStr){
+  const mn = mnemonic.toUpperCase();
+  if(mn in SIMPLE) return {opcode:SIMPLE[mn], operand:null, size:1};
+  if(mn === 'MOV'){
+    const ops = operandStr.split(',').map(s=>s.trim().toUpperCase());
+    if(ops.length===2 && ops[0]==='A' && ops[1]==='B') return {opcode:0x30, operand:null, size:1};
+    if(ops.length===2 && ops[0]==='B' && ops[1]==='A') return {opcode:0x31, operand:null, size:1};
+    throw new Error('MOV inválido — use "MOV A,B" ou "MOV B,A"');
+  }
+  if(mn === 'CALL'){
+    const target = operandStr.replace(/^\[/,'').replace(/\]$/,'').trim();
+    if(!target) throw new Error('CALL precisa de um endereço/rótulo');
+    return {opcode:0xD0, operand:{expr:target}, size:2};
+  }
+  if((mn==='INC' || mn==='DEC') && operandStr.trim().startsWith('[')){
+    const parsedMD = parseOperandExpr(operandStr);
+    const opc = (mn==='INC') ? 0x84 : 0x85;
+    return {opcode:opc, operand:{expr:parsedMD.expr}, size:2};
+  }
+  if(mn in REGOPS){
+    const reg = operandStr.trim().toUpperCase();
+    if(reg==='A'||reg==='B') return {opcode:REGOPS[mn][reg], operand:null, size:1};
+    const hint = (mn==='INC'||mn==='DEC') ? ' ou [endereço]' : '';
+    throw new Error(mn + ' espera operando A ou B' + hint);
+  }
+  if(mn in JUMPOPS){
+    const target = operandStr.replace(/^\[/,'').replace(/\]$/,'').trim();
+    if(!target) throw new Error(mn + ' precisa de um endereço/rótulo');
+    return {opcode:JUMPOPS[mn], operand:{expr:target}, size:2};
+  }
+  if(mn in OPVALUE){
+    const forms = OPVALUE[mn];
+    const parsed = parseOperandExpr(operandStr);
+    if(parsed.mode==='bare'){
+      if(parsed.expr.toUpperCase()==='B' && forms.b!==undefined) return {opcode:forms.b, operand:null, size:1};
+      throw new Error('operando inválido para ' + mn + ': "' + operandStr + '"');
+    }
+    if(parsed.mode==='imm'){
+      if(forms.imm===undefined) throw new Error(mn + ' não tem modo imediato (#valor)');
+      return {opcode:forms.imm, operand:{expr:parsed.expr}, size:2};
+    }
+    if(parsed.mode==='mem'){
+      if(parsed.expr.toUpperCase()==='B' && forms.memb!==undefined){
+        return {opcode:forms.memb, operand:null, size:1};
+      }
+      if(forms.mem===undefined) throw new Error(mn + ' não tem modo de memória [endereço]');
+      return {opcode:forms.mem, operand:{expr:parsed.expr}, size:2};
+    }
+  }
+  throw new Error('instrução desconhecida: "' + mnemonic + '"');
+}
+
+function splitTopLevel(s){
+  const out=[]; let cur=''; let inStr=false;
+  for(const ch of s){
+    if(ch==='"') inStr=!inStr;
+    if(ch===',' && !inStr){ out.push(cur); cur=''; continue; }
+    cur+=ch;
+  }
+  if(cur.trim()!=='') out.push(cur);
+  return out;
+}
+
+function assemble(source){
+  const lines = source.split('\n');
+  const symtab = {};
+  const parsed = [];
+  const errors = [];
+  let addr = 0;
+
+  lines.forEach((raw, idx) => {
+    const lineNo = idx+1;
+    let line = raw.split(';')[0].trim();
+    if(!line) return;
+
+    const lm = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$/);
+    let label = null;
+    if(lm){ label = lm[1]; line = lm[2].trim(); }
+    if(label){
+      if(Object.prototype.hasOwnProperty.call(symtab,label)){
+        errors.push('Linha ' + lineNo + ': rótulo "' + label + '" duplicado');
+      }
+      symtab[label] = addr;
+    }
+    if(!line) return;
+
+    const mm = line.match(/^(\S+)\s*(.*)$/);
+    const mnemonic = mm[1];
+    const operandStr = (mm[2]||'').trim();
+    const upMn = mnemonic.toUpperCase();
+
+    if(upMn === 'ORG'){
+      try{ addr = resolveValue(operandStr, symtab) & 0xFF; }
+      catch(e){ errors.push('Linha ' + lineNo + ': ' + e.message); }
+      return;
+    }
+    if(upMn === 'DB' || upMn === 'DEFB'){
+      const items = splitTopLevel(operandStr);
+      let size = 0;
+      items.forEach(it=>{
+        it = it.trim();
+        size += (it.startsWith('"') && it.endsWith('"')) ? Math.max(0,it.length-2) : 1;
+      });
+      if(addr + size > 256){ errors.push('Linha ' + lineNo + ': DB ultrapassa os 256 bytes de memória'); return; }
+      parsed.push({lineNo, directive:'DB', items, address:addr, size});
+      addr += size;
+      return;
+    }
+
+    let enc;
+    try{ enc = sizeAndEncode(mnemonic, operandStr); }
+    catch(e){ errors.push('Linha ' + lineNo + ': ' + e.message); return; }
+    if(addr + enc.size > 256){ errors.push('Linha ' + lineNo + ': programa ultrapassa os 256 bytes de memória'); return; }
+    parsed.push({lineNo, mnemonic:upMn, operandStr, address:addr, opcode:enc.opcode, operand:enc.operand, size:enc.size});
+    addr += enc.size;
+  });
+
+  if(errors.length) return {ok:false, errors};
+
+  const mem = new Uint8Array(256);
+  const listing = [];
+
+  parsed.forEach(p=>{
+    if(p.directive==='DB'){
+      let a = p.address;
+      p.items.forEach(it=>{
+        it = it.trim();
+        if(it.startsWith('"') && it.endsWith('"')){
+          for(const ch of it.slice(1,-1)) mem[a++ & 0xFF] = ch.charCodeAt(0) & 0xFF;
+        } else {
+          let v;
+          try{ v = resolveValue(it, symtab); }
+          catch(e){ errors.push('Linha ' + p.lineNo + ': ' + e.message); return; }
+          mem[a++ & 0xFF] = v & 0xFF;
+        }
+      });
+      listing.push({address:p.address, bytes:Array.from(mem.slice(p.address,p.address+p.size)), lineNo:p.lineNo, text:'DB ' + p.items.join(',')});
+      return;
+    }
+    mem[p.address] = p.opcode;
+    const bytes = [p.opcode];
+    if(p.operand){
+      let val;
+      try{ val = resolveValue(p.operand.expr, symtab); }
+      catch(e){ errors.push('Linha ' + p.lineNo + ': ' + e.message); return; }
+      if(val < 0 || val > 255) errors.push('Linha ' + p.lineNo + ': valor fora da faixa 0-255 ("' + p.operand.expr + '" = ' + val + ')');
+      mem[(p.address+1)&0xFF] = val & 0xFF;
+      bytes.push(val & 0xFF);
+    }
+    listing.push({address:p.address, bytes, lineNo:p.lineNo, text:p.mnemonic + (p.operandStr? ' '+p.operandStr : '')});
+  });
+
+  if(errors.length) return {ok:false, errors};
+  return {ok:true, mem, listing, symtab, size:addr};
+}
+
+/* ============================================================
+   CPU / EMULADOR
+   ============================================================ */
+class CPU{
+  constructor(){ this.mem = new Uint8Array(256); this.reset(); }
+  reset(){
+    this.A=0; this.B=0; this.PC=0;
+    this.flags = {N:0,Z:0,C:0,V:0};
+    this.blocked = 'NONE'; // NONE | WAIT_INPUT | DELAY | HALTED
+    this.delayUntil = 0;
+    this.outReg = 0;
+    this.addrReg = 0;
+    this.dataReg = this.mem[0];
+    this.lastError = null;
+  }
+  fetch(){ const v=this.mem[this.PC]; this.PC=(this.PC+1)&0xFF; return v; }
+  updateZN(v){ this.flags.Z=(v===0)?1:0; this.flags.N=(v&0x80)?1:0; }
+  clearCV(){ this.flags.C=0; this.flags.V=0; }
+
+  aluADD(v){
+    const oldA=this.A, r=oldA+v; this.A=r&0xFF;
+    this.flags.C = (r>255)?1:0;
+    const sA=(oldA&0x80)!==0, sB=(v&0x80)!==0, sR=(this.A&0x80)!==0;
+    this.flags.V = (sA===sB && sA!==sR)?1:0;
+    this.updateZN(this.A);
+  }
+  aluSUB(v){
+    const oldA=this.A, r=(oldA-v)&0xFF; this.A=r;
+    this.flags.C = (oldA>=v)?1:0;
+    const sA=(oldA&0x80)!==0, sB=(v&0x80)!==0, sR=(r&0x80)!==0;
+    this.flags.V = (sA!==sB && sA!==sR)?1:0;
+    this.updateZN(r);
+  }
+  aluCMP(v){
+    const oldA=this.A, r=(oldA-v)&0xFF;
+    this.flags.C = (oldA>=v)?1:0;
+    const sA=(oldA&0x80)!==0, sB=(v&0x80)!==0, sR=(r&0x80)!==0;
+    this.flags.V = (sA!==sB && sA!==sR)?1:0;
+    this.updateZN(r);
+  }
+  aluINC(isA){
+    const old = isA?this.A:this.B, r=(old+1)&0xFF;
+    if(isA) this.A=r; else this.B=r;
+    this.flags.C = (old===0xFF)?1:0;
+    this.flags.V = (old===0x7F)?1:0;
+    this.updateZN(r);
+  }
+  aluDEC(isA){
+    const old = isA?this.A:this.B, r=(old-1)&0xFF;
+    if(isA) this.A=r; else this.B=r;
+    this.flags.C = (old===0)?0:1;
+    this.flags.V = (old===0x80)?1:0;
+    this.updateZN(r);
+  }
+  shiftLeft(isA){
+    let v = isA?this.A:this.B;
+    this.flags.C = (v&0x80)?1:0;
+    v=(v<<1)&0xFF;
+    if(isA) this.A=v; else this.B=v;
+    this.updateZN(v);
+  }
+  shiftRight(isA){
+    let v = isA?this.A:this.B;
+    this.flags.C = (v&0x01)?1:0;
+    v=(v>>1)&0xFF;
+    if(isA) this.A=v; else this.B=v;
+    this.updateZN(v);
+  }
+  rotateLeft(isA){
+    let v = isA?this.A:this.B; const bit7=(v&0x80)!==0;
+    v=(v<<1)&0xFF; if(bit7) v|=0x01;
+    this.flags.C = bit7?1:0;
+    if(isA) this.A=v; else this.B=v;
+    this.updateZN(v);
+  }
+  rotateRight(isA){
+    let v = isA?this.A:this.B; const bit0=(v&0x01)!==0;
+    v=(v>>1)&0xFF; if(bit0) v|=0x80;
+    this.flags.C = bit0?1:0;
+    if(isA) this.A=v; else this.B=v;
+    this.updateZN(v);
+  }
+
+  execute(op){
+    this.lastError = null;
+    switch(op){
+      case 0x00: break;
+      case 0x01: this.blocked='HALTED'; break;
+      case 0x10: { const a=this.fetch(); this.A=this.mem[a]; this.updateZN(this.A); break; }
+      case 0x11: { this.A=this.fetch(); this.updateZN(this.A); break; }
+      case 0x12: { const a=this.fetch(); this.B=this.mem[a]; this.updateZN(this.B); break; }
+      case 0x13: { this.B=this.fetch(); this.updateZN(this.B); break; }
+      case 0x14: { this.A=this.mem[this.B]; this.updateZN(this.A); break; }
+      case 0x20: { const a=this.fetch(); this.mem[a]=this.A; break; }
+      case 0x21: { this.mem[this.B]=this.A; break; }
+      case 0x22: { const a=this.fetch(); this.mem[a]=this.B; break; }
+      case 0x30: this.B=this.A; this.updateZN(this.B); break;
+      case 0x31: this.A=this.B; this.updateZN(this.A); break;
+      case 0x32: { const t=this.A; this.A=this.B; this.B=t; this.updateZN(this.A); break; }
+      case 0x40: this.aluADD(this.B); break;
+      case 0x41: { const a=this.fetch(); this.aluADD(this.mem[a]); break; }
+      case 0x42: this.aluADD(this.fetch()); break;
+      case 0x50: this.aluSUB(this.B); break;
+      case 0x51: { const a=this.fetch(); this.aluSUB(this.mem[a]); break; }
+      case 0x52: this.aluSUB(this.fetch()); break;
+      case 0x60: this.A|=this.B; this.clearCV(); this.updateZN(this.A); break;
+      case 0x61: { const a=this.fetch(); this.A|=this.mem[a]; this.clearCV(); this.updateZN(this.A); break; }
+      case 0x62: this.A&=this.B; this.clearCV(); this.updateZN(this.A); break;
+      case 0x63: { const a=this.fetch(); this.A&=this.mem[a]; this.clearCV(); this.updateZN(this.A); break; }
+      case 0x64: this.A^=this.B; this.clearCV(); this.updateZN(this.A); break;
+      case 0x65: { const a=this.fetch(); this.A^=this.mem[a]; this.clearCV(); this.updateZN(this.A); break; }
+      case 0x66: { const v=this.fetch(); this.A^=v; this.clearCV(); this.updateZN(this.A); break; }
+      case 0x67: this.A=(~this.A)&0xFF; this.clearCV(); this.updateZN(this.A); break;
+      case 0x68: this.B=(~this.B)&0xFF; this.clearCV(); this.updateZN(this.B); break;
+      case 0x69: { const v=this.fetch(); this.A&=v; this.clearCV(); this.updateZN(this.A); break; }
+      case 0x6A: { const v=this.fetch(); this.A|=v; this.clearCV(); this.updateZN(this.A); break; }
+      case 0x70: this.aluCMP(this.B); break;
+      case 0x71: { const a=this.fetch(); this.aluCMP(this.mem[a]); break; }
+      case 0x72: this.aluCMP(this.fetch()); break;
+      case 0x80: this.aluINC(true); break;
+      case 0x81: this.aluDEC(true); break;
+      case 0x82: this.aluINC(false); break;
+      case 0x83: this.aluDEC(false); break;
+      case 0x84: {
+        const a=this.fetch(); const old=this.mem[a]; const r=(old+1)&0xFF;
+        this.mem[a]=r;
+        this.flags.C = (old===0xFF)?1:0;
+        this.flags.V = (old===0x7F)?1:0;
+        this.updateZN(r);
+        break;
+      }
+      case 0x85: {
+        const a=this.fetch(); const old=this.mem[a]; const r=(old-1)&0xFF;
+        this.mem[a]=r;
+        this.flags.C = (old===0)?0:1;
+        this.flags.V = (old===0x80)?1:0;
+        this.updateZN(r);
+        break;
+      }
+      case 0x90: { const a=this.fetch(); this.PC=a; break; }
+      case 0x91: { const a=this.fetch(); if(this.flags.Z) this.PC=a; break; }
+      case 0x92: { const a=this.fetch(); if(!this.flags.Z) this.PC=a; break; }
+      case 0x93: { const a=this.fetch(); if(this.flags.C) this.PC=a; break; }
+      case 0x94: { const a=this.fetch(); if(!this.flags.C) this.PC=a; break; }
+      case 0x95: { const a=this.fetch(); if(this.flags.N) this.PC=a; break; }
+      case 0x96: { const a=this.fetch(); if(!this.flags.N) this.PC=a; break; }
+      case 0x97: { const a=this.fetch(); if(this.flags.V) this.PC=a; break; }
+      case 0x98: { const a=this.fetch(); if(!this.flags.V) this.PC=a; break; }
+      case 0xA0: this.shiftLeft(true); break;
+      case 0xA1: this.shiftRight(true); break;
+      case 0xA2: this.rotateLeft(true); break;
+      case 0xA3: this.rotateRight(true); break;
+      case 0xA4: this.shiftLeft(false); break;
+      case 0xA5: this.shiftRight(false); break;
+      case 0xA6: this.rotateLeft(false); break;
+      case 0xA7: this.rotateRight(false); break;
+      case 0xB0: this.blocked='WAIT_INPUT'; break;
+      case 0xB1: this.outReg=this.A; break;
+      case 0xB2: this.A=this.dataReg&0xFF; this.updateZN(this.A); break;
+      case 0xC0: this.A=Math.floor(Math.random()*256); this.updateZN(this.A); break;
+      case 0xC1: this.delayUntil = performance.now() + this.A; this.blocked='DELAY'; break;
+      case 0xC2: this.delayUntil = performance.now() + this.B; this.blocked='DELAY'; break;
+      case 0xD0: { const a=this.fetch(); this.mem[RET_ADDR]=this.PC; this.PC=a; break; }
+      case 0xD1: { this.PC=this.mem[RET_ADDR]; break; }
+      default:
+        this.blocked = 'HALTED';
+        this.lastError = 'Opcode desconhecido: 0x' + op.toString(16).padStart(2,'0').toUpperCase();
+    }
+  }
+}
+
+const cpu = new CPU();
+let running = false;
+let lastStepTime = 0;
+
+function hex2(n){ return '0x' + (n & 0xFF).toString(16).padStart(2,'0').toUpperCase(); }
+
+function doStep(){
+  if(cpu.blocked !== 'NONE') return;
+  const pcAntes = cpu.PC;
+  cpu.addrReg = pcAntes;
+  const op = cpu.fetch();
+  cpu.execute(op);
+  cpu.dataReg = cpu.A;
+  if(cpu.lastError) showError(cpu.lastError);
+}
+
+function showError(msg){
+  const box = document.getElementById('asmErrors');
+  box.textContent = msg;
+}
+
+/* ============================================================
+   UI — construção dos LEDs / chaves
+   ============================================================ */
+function buildLedRow(container, count, cls, labels){
+  container.innerHTML='';
+  const leds=[];
+  for(let i=0;i<count;i++){
+    const d=document.createElement('div');
+    d.className='led '+cls;
+    container.appendChild(d);
+    leds.push(d);
+    const lab=document.createElement('span'); lab.textContent=labels[i]; d.appendChild(lab);
+  }
+  return leds;
+}
+
+const ledsAddr = buildLedRow(document.getElementById('ledsAddr'),8,'amber', [128,64,32,16,8,4,2,1]);
+const ledsData = buildLedRow(document.getElementById('ledsData'),8,'green', [128,64,32,16,8,4,2,1]);
+const ledsOut  = buildLedRow(document.getElementById('ledsOut'),8,'purple', [128,64,32,16,8,4,2,1]);
+
+const ctrlLabels = ['N','Z','C','V','HALT','I/O','RUN','MEM'];
+const ctrlContainer = document.getElementById('ledsCtrl');
+const ledsCtrl = ctrlLabels.map(lbl=>{
+  const d=document.createElement('div');
+  d.className='led red';
+  const s=document.createElement('span'); s.textContent=lbl; d.appendChild(s);
+  ctrlContainer.appendChild(d);
+  return d;
+});
+
+const swContainer = document.getElementById('switches');
+const switches = [];
+const swWeights = [8,4,2,1,8,4,2,1];
+swWeights.forEach((w,i)=>{
+  const d=document.createElement('div');
+  d.className='sw';
+  const knob=document.createElement('div'); knob.className='knob'; d.appendChild(knob);
+  const lab=document.createElement('span'); lab.textContent=w; d.appendChild(lab);
+  d.addEventListener('click', ()=>{ cpu.dataReg ^= (1<<(7-i)); cpu.dataReg &= 0xFF; render(); });
+  swContainer.appendChild(d);
+  switches.push(d);
+});
+
+/* memória */
+const memGridEl = document.getElementById('memGrid');
+function buildMemGrid(){
+  memGridEl.innerHTML='';
+  memGridEl.appendChild(document.createElement('div'));
+  for(let c=0;c<16;c++){
+    const h=document.createElement('div'); h.className='hdr'; h.textContent=c.toString(16).toUpperCase();
+    memGridEl.appendChild(h);
+  }
+  for(let r=0;r<16;r++){
+    const rl=document.createElement('div'); rl.className='rowlbl'; rl.textContent=(r*16).toString(16).padStart(2,'0').toUpperCase();
+    memGridEl.appendChild(rl);
+    for(let c=0;c<16;c++){
+      const idx=r*16+c;
+      const cell=document.createElement('div');
+      cell.className='mem-cell';
+      cell.dataset.idx=idx;
+      cell.addEventListener('click', ()=>{
+        if(running || cpu.blocked!=='NONE') return;
+        const cur = cpu.mem[idx].toString(16).padStart(2,'0').toUpperCase();
+        const entrada = prompt('Novo valor (hex 00-FF) para o endereço 0x'+idx.toString(16).padStart(2,'0').toUpperCase()+':', cur);
+        if(entrada===null) return;
+        const v = parseInt(entrada.replace('$','').replace(/^0x/i,''),16);
+        if(isNaN(v)) return;
+        cpu.mem[idx] = v & 0xFF;
+        if(idx===cpu.addrReg) cpu.dataReg = cpu.mem[idx];
+        render();
+      });
+      memGridEl.appendChild(cell);
+    }
+  }
+}
+buildMemGrid();
+
+/* ============================================================
+   RENDER
+   ============================================================ */
+function render(){
+  const a = cpu.addrReg, d = cpu.dataReg, o = cpu.outReg;
+  for(let i=0;i<8;i++) ledsAddr[i].classList.toggle('on', !!((a>>(7-i))&1));
+  for(let i=0;i<8;i++) ledsData[i].classList.toggle('on', !!((d>>(7-i))&1));
+  for(let i=0;i<8;i++) ledsOut[i].classList.toggle('on', !!((o>>(7-i))&1));
+
+  const f = cpu.flags;
+  const ctrlBits = [f.N, f.Z, f.C, f.V, cpu.blocked==='HALTED'?1:0, cpu.blocked==='WAIT_INPUT'?1:0, running?1:0, 0];
+  ctrlBits.forEach((bit,i)=> ledsCtrl[i].classList.toggle('on', !!bit));
+
+  document.getElementById('addrHex').textContent = hex2(a);
+  document.getElementById('dataHex').textContent = hex2(d);
+  document.getElementById('outHex').textContent = hex2(o);
+  document.getElementById('regA').textContent = hex2(cpu.A);
+  document.getElementById('regB').textContent = hex2(cpu.B);
+  document.getElementById('regPC').textContent = hex2(cpu.PC);
+  document.getElementById('regState').textContent = cpu.blocked;
+
+  const opAtual = cpu.mem[cpu.addrReg];
+  let instrTxt = DISASM[opAtual] || ('??? ' + hex2(opAtual));
+  if(HAS_OPERAND.has(opAtual)) instrTxt += ' ' + hex2(cpu.mem[(cpu.addrReg+1)&0xFF]);
+  document.getElementById('regInstr').textContent = instrTxt;
+
+  document.querySelectorAll('.mem-cell').forEach(cell=>{
+    const idx = +cell.dataset.idx;
+    cell.textContent = cpu.mem[idx].toString(16).padStart(2,'0').toUpperCase();
+    cell.classList.toggle('pc', idx===cpu.addrReg);
+    cell.classList.toggle('nz', cpu.mem[idx]!==0);
+  });
+
+  const stepOk = !running && cpu.blocked==='NONE';
+  const manualOk = !running && cpu.blocked==='NONE';
+  document.getElementById('btnStep').disabled = !stepOk;
+  document.getElementById('btnAddr').disabled = !manualOk;
+  document.getElementById('btnClr').disabled = !manualOk;
+  document.getElementById('btnIncr').disabled = !(cpu.blocked==='WAIT_INPUT' || manualOk);
+  document.getElementById('btnRun').disabled = false;
+  document.getElementById('btnRun').classList.toggle('active', running);
+  document.getElementById('btnRun').textContent = cpu.blocked==='HALTED' ? 'SAIR DO HALT' : (running ? 'STOP' : 'RUN');
+}
+
+/* ============================================================
+   CONTROLES
+   ============================================================ */
+document.getElementById('btnStep').addEventListener('click', ()=>{ doStep(); render(); });
+
+document.getElementById('btnAddr').addEventListener('click', ()=>{
+  if(running || cpu.blocked!=='NONE') return;
+  cpu.addrReg = cpu.dataReg;
+  cpu.PC = cpu.addrReg;
+  cpu.dataReg = cpu.mem[cpu.addrReg];
+  render();
+});
+
+document.getElementById('btnClr').addEventListener('click', ()=>{
+  if(running || cpu.blocked!=='NONE') return;
+  cpu.dataReg = 0;
+  render();
+});
+
+document.getElementById('btnIncr').addEventListener('click', ()=>{
+  if(cpu.blocked==='WAIT_INPUT'){
+    cpu.A = cpu.dataReg & 0xFF;
+    cpu.updateZN(cpu.A);
+    cpu.blocked = 'NONE';
+  } else if(!running && cpu.blocked==='NONE'){
+    cpu.mem[cpu.addrReg] = cpu.dataReg & 0xFF;
+    cpu.addrReg = (cpu.addrReg+1)&0xFF;
+    cpu.PC = cpu.addrReg;
+    cpu.dataReg = cpu.mem[cpu.addrReg];
+  }
+  render();
+});
+
+document.getElementById('btnRun').addEventListener('click', ()=>{
+  if(cpu.blocked==='HALTED'){ cpu.blocked='NONE'; running=false; }
+  else { running = !running; lastStepTime = 0; }
+  render();
+});
+
+document.getElementById('btnReset').addEventListener('click', ()=>{
+  running=false;
+  cpu.reset();
+  render();
+});
+
+document.getElementById('btnWipe').addEventListener('click', ()=>{
+  if(!confirm('Apagar toda a memória (256 bytes)?')) return;
+  running=false;
+  cpu.mem.fill(0);
+  cpu.reset();
+  render();
+});
+
+const speedInput = document.getElementById('speed');
+let stepIntervalMs = 1000/8;
+speedInput.addEventListener('input', ()=>{
+  const v = +speedInput.value;
+  stepIntervalMs = 1000/v;
+  document.getElementById('speedLbl').textContent = v + ' instr/s';
+});
+
+/* loop de execução */
+function frame(now){
+  if(cpu.blocked==='DELAY' && now >= cpu.delayUntil) cpu.blocked='NONE';
+  if(running && cpu.blocked==='NONE'){
+    if(now - lastStepTime >= stepIntervalMs){
+      doStep();
+      lastStepTime = now;
+      if(cpu.blocked==='HALTED') running=false;
+    }
+  }
+  render();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+/* ============================================================
+   ASSEMBLAR
+   ============================================================ */
+function doAssemble(){
+  const src = document.getElementById('asmSource').value;
+  const result = assemble(src);
+  const errBox = document.getElementById('asmErrors');
+  const hexBox = document.getElementById('hexDump');
+  if(!result.ok){
+    errBox.textContent = result.errors.join('\n');
+    return;
+  }
+  errBox.textContent = '';
+  running = false;
+  cpu.mem.set(result.mem);
+  cpu.reset();
+  render();
+  hexBox.textContent = result.listing.map(l =>
+    l.address.toString(16).padStart(2,'0').toUpperCase() + ':  ' +
+    l.bytes.map(b=>b.toString(16).padStart(2,'0').toUpperCase()).join(' ').padEnd(8,' ') +
+    '   ; ' + l.text
+  ).join('\n') + '\n\nTotal: ' + result.size + ' / 256 bytes';
+}
+document.getElementById('btnAssemble').addEventListener('click', doAssemble);
+document.getElementById('asmSource').addEventListener('keydown', e=>{
+  if(e.ctrlKey && e.key==='Enter'){ e.preventDefault(); doAssemble(); return; }
+  if(e.key === 'Tab'){
+    e.preventDefault();
+    const ta = e.target;
+    const start = ta.selectionStart, end = ta.selectionEnd;
+    const TAB = '    '; // 4 espaços
+    if(e.shiftKey){
+      // remove até 4 espaços/whitespace no início da linha atual
+      const lineStart = ta.value.lastIndexOf('\n', start-1) + 1;
+      const lineText = ta.value.slice(lineStart, start);
+      const m = lineText.match(/^[ \t]{1,4}/);
+      if(m){
+        ta.value = ta.value.slice(0, lineStart) + ta.value.slice(lineStart + m[0].length);
+        const removed = m[0].length;
+        ta.selectionStart = ta.selectionEnd = Math.max(lineStart, start - removed);
+      }
+    } else {
+      ta.value = ta.value.slice(0, start) + TAB + ta.value.slice(end);
+      ta.selectionStart = ta.selectionEnd = start + TAB.length;
+    }
+  }
+});
+
+/* ============================================================
+   ARQUIVOS
+   ============================================================ */
+document.getElementById('btnSave').addEventListener('click', ()=>{
+  const blob = new Blob([document.getElementById('asmSource').value], {type:'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'programa.asm';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+document.getElementById('btnOpen').addEventListener('click', ()=> document.getElementById('fileInput').click());
+document.getElementById('fileInput').addEventListener('change', e=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{ document.getElementById('asmSource').value = reader.result; };
+  reader.readAsText(file);
+  e.target.value = '';
+});
+
+/* ============================================================
+   EXEMPLOS
+   ============================================================ */
+const EXAMPLES = {
+  contador:
+`; ===========================
+; Contador binario automatico
+; Mostra a contagem 0..255 nos LEDs de saida (OUTA)
+; ===========================
+lda #$00
+ldb #200
+
+loop:
+    outa
+    dlayb
+    inc a
+    jp loop
+`,
+  reflexo:
+`; ====================
+; Game reflexo
+; ====================
+
+lda #250        ; delay inicial
+sta [$80]       ; salva delay inicial
+loop:
+ldb [$80]       ; carrega valor de delay em B
+lda #0          ; carrega 0 em A
+outa            ; zera a saida
+ina             ; espera INCR para iniciar
+rnda            ; gera numero randomico
+dlayb           ; delay
+swap a, b       ; A <-> B (salva o valor sorteado em B)
+lda #0          ; zera led dados
+ina             ; aguarda o jogador apertar INCR
+xor b           ; compara A com B
+cp #0           ; se A == B entao Z=1
+jpnz gameover   ; se nao for Z, perdeu
+lda #$ff        ; carrega valor "acertou"
+outa            ; mostra na saida
+lda [$80]       ; carrega o valor de delay em A
+sub #10         ; diminui 10 (fica mais dificil)
+sta [$80]       ; salva novo nivel
+
+gameover:
+ina             ; aguarda tecla para voltar ao inicio
+jp loop         ; volta para o inicio
+`,
+  adivinha:
+`; ============================================================
+; JOGO: ADIVINHE O NUMERO (0-15)
+; Ajuste o palpite nas chaves de dados e aperte INCR.
+; Dica no OUTA: bit 0 = numero secreto é menor, bit 7 = maior,
+; tudo aceso = acertou.
+; ============================================================
+init:
+    lda #$0f
+    sta [$82]      ; mascara para limitar 0-15
+
+restart:
+    rnda
+    and [$82]
+    sta [$80]      ; numero secreto
+
+tenta:
+    lda #$00
+    outa
+    ina            ; espera o palpite + INCR
+    and [$82]
+    ldb [$80]
+    cp b
+    jpz acertou
+    jpnc maior
+
+menor:
+    lda #$01
+    outa
+    jp tenta
+
+maior:
+    lda #$80
+    outa
+    jp tenta
+
+acertou:
+    lda #$ff
+    outa
+    dlaya
+    ina
+    jp restart
+`,
+  vazio:
+`; novo programa
+; escreva seu codigo aqui
+
+
+`
+};
+document.getElementById('exampleSelect').addEventListener('change', e=>{
+  const key = e.target.value;
+  if(!key) return;
+  document.getElementById('asmSource').value = EXAMPLES[key];
+  e.target.value = '';
+});
+
+/* ============================================================
+   REFERÊNCIA DE OPCODES (colapsável)
+   ============================================================ */
+const OPCODE_TABLE = [
+  {cat:'SYSTEM', rows:[
+    ['00','NOP',''],
+    ['01','HALT','']
+  ]},
+  {cat:'LD', rows:[
+    ['10','LDA [addr]','A &lt;- MEM[addr]'],
+    ['11','LDA #value','A &lt;- value'],
+    ['12','LDB [addr]','B &lt;- MEM[addr]'],
+    ['13','LDB #value','B &lt;- value'],
+    ['14','LDA [B]','A &lt;- MEM[B]']
+  ]},
+  {cat:'STA', rows:[
+    ['20','STA [addr]','MEM[addr] &lt;- A'],
+    ['21','STA [B]','MEM[B] &lt;- A'],
+    ['22','STB [addr]','MEM[addr] &lt;- B']
+  ]},
+  {cat:'MOV', rows:[
+    ['30','MOV A,B','B &lt;- A'],
+    ['31','MOV B,A','A &lt;- B'],
+    ['32','SWAP','A &lt;-&gt; B']
+  ]},
+  {cat:'ADD', rows:[
+    ['40','ADD B','A &lt;- A + B'],
+    ['41','ADD [addr]','A &lt;- A + MEM[addr]'],
+    ['42','ADD #value','A &lt;- A + value']
+  ]},
+  {cat:'SUB', rows:[
+    ['50','SUB B','A &lt;- A - B'],
+    ['51','SUB [addr]','A &lt;- A - MEM[addr]'],
+    ['52','SUB #value','A &lt;- A - value']
+  ]},
+  {cat:'LOGIC', rows:[
+    ['60','OR B','A &lt;- A OR B'],
+    ['61','OR [addr]','A &lt;- A OR MEM[addr]'],
+    ['62','AND B','A &lt;- A AND B'],
+    ['63','AND [addr]','A &lt;- A AND MEM[addr]'],
+    ['64','XOR B','A &lt;- A XOR B'],
+    ['65','XOR [addr]','A &lt;- A XOR MEM[addr]'],
+    ['66','XOR #value','A &lt;- A XOR value'],
+    ['67','NOT A','A &lt;- NOT A'],
+    ['68','NOT B','B &lt;- NOT B'],
+    ['69','AND #value','A &lt;- A AND value'],
+    ['6A','OR #value','A &lt;- A OR value']
+  ]},
+  {cat:'COMPARE', rows:[
+    ['70','CP B','FLAGS &lt;- compare A, B'],
+    ['71','CP [addr]','FLAGS &lt;- compare A, MEM[addr]'],
+    ['72','CP #value','FLAGS &lt;- compare A, value']
+  ]},
+  {cat:'INC / DEC', rows:[
+    ['80','INC A','A &lt;- A + 1'],
+    ['81','DEC A','A &lt;- A - 1'],
+    ['82','INC B','B &lt;- B + 1'],
+    ['83','DEC B','B &lt;- B - 1'],
+    ['84','INC [addr]','MEM[addr] &lt;- MEM[addr] + 1'],
+    ['85','DEC [addr]','MEM[addr] &lt;- MEM[addr] - 1']
+  ]},
+  {cat:'JUMP', rows:[
+    ['90','JP [addr]','PC &lt;- addr'],
+    ['91','JPZ [addr]','PC &lt;- addr se Z = 1'],
+    ['92','JPNZ [addr]','PC &lt;- addr se Z = 0'],
+    ['93','JPC [addr]','PC &lt;- addr se C = 1'],
+    ['94','JPNC [addr]','PC &lt;- addr se C = 0'],
+    ['95','JPN [addr]','PC &lt;- addr se N = 1'],
+    ['96','JNN [addr]','PC &lt;- addr se N = 0'],
+    ['97','JPV [addr]','PC &lt;- addr se V = 1'],
+    ['98','JPNV [addr]','PC &lt;- addr se V = 0']
+  ]},
+  {cat:'SUBROTINAS', rows:[
+    ['D0','CALL [addr]','MEM[$FF] &lt;- PC ; PC &lt;- addr'],
+    ['D1','RET','PC &lt;- MEM[$FF]']
+  ]},
+  {cat:'SHIFT / ROTATE', rows:[
+
+    ['A0','SHL A','A &lt;- A &lt;&lt; 1'],
+    ['A1','SHR A','A &lt;- A &gt;&gt; 1'],
+    ['A2','ROL A','A &lt;- rotate-left(A)'],
+    ['A3','ROR A','A &lt;- rotate-right(A)'],
+    ['A4','SHL B','B &lt;- B &lt;&lt; 1'],
+    ['A5','SHR B','B &lt;- B &gt;&gt; 1'],
+    ['A6','ROL B','B &lt;- rotate-left(B)'],
+    ['A7','ROR B','B &lt;- rotate-right(B)']
+  ]},
+  {cat:'I/O', rows:[
+    ['B0','INA','A &lt;- INPUT (espera INCR)'],
+    ['B1','OUTA','OUTPUT &lt;- A'],
+    ['B2','KEY','A &lt;- INPUT (leitura direta)']
+  ]},
+  {cat:'MISC', rows:[
+    ['C0','RNDA','A &lt;- RANDOM 0-255'],
+    ['C1','DLAYA','delay(A * 1ms)'],
+    ['C2','DLAYB','delay(B * 1ms)']
+  ]}
+];
+ 
+document.getElementById('refBox').innerHTML =
+  '<table style="width:100%; border-collapse:collapse; font-family:var(--mono); font-size:.74rem;">' +
+  '<tr style="color:var(--muted); text-align:left;"><th style="padding:2px 8px 2px 0;">hex</th><th style="padding:2px 8px;">instrução</th><th style="padding:2px 0;">operação</th></tr>' +
+  OPCODE_TABLE.map(group =>
+    '<tr><td colspan="3" style="color:var(--amber); padding:8px 0 3px;">' + group.cat + '</td></tr>' +
+    group.rows.map(([hex,mn,op]) =>
+      '<tr><td style="padding:1px 8px 1px 0; color:var(--green);">' + hex + '</td>' +
+      '<td style="padding:1px 8px; color:var(--ink);">' + mn + '</td>' +
+      '<td style="padding:1px 0; color:var(--muted);">' + op + '</td></tr>'
+    ).join('')
+  ).join('') +
+  '</table>' +
+  '<p style="color:var(--muted); margin-top:8px;">Endereços/valores aceitam <code>$FF</code> (hex), <code>255</code> (decimal) ou rótulos. Diretivas extras: <code>ORG endereço</code> e <code>DB v1,v2,"texto"</code>. O endereço <code>$FF</code> é reservado para o retorno de <code>CALL</code>/<code>RET</code> — evite guardar dados ali se for usar sub-rotinas.</p>';
+/* ============================================================
+   INICIALIZAÇÃO
+   ============================================================ */
+document.getElementById('asmSource').value = EXAMPLES.contador;
+doAssemble();
+</script>
+</body>
+</html>
