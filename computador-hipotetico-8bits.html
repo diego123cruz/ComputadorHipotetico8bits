@@ -176,6 +176,7 @@
       </select>
       <button id="btnOpen">Abrir .asm</button>
       <button id="btnSave">Salvar .asm</button>
+      <button id="btnBin">Baixar .bin</button>
       <input type="file" id="fileInput" accept=".asm,.txt" hidden>
     </div>
     <pre class="errors" id="asmErrors"></pre>
@@ -914,6 +915,15 @@ document.getElementById('btnSave').addEventListener('click', ()=>{
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'programa.asm';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+document.getElementById('btnBin').addEventListener('click', ()=>{
+  // exporta os 256 bytes atuais da memória (o que está montado/programado agora)
+  const blob = new Blob([cpu.mem], {type:'application/octet-stream'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'programa.bin';
   a.click();
   URL.revokeObjectURL(a.href);
 });

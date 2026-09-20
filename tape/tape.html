@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tape · Enviar .bin por áudio</title>
+<style>
+  :root{
+    --bg:#0a100c;
+    --board:#132a1d;
+    --ink:#dff3e6;
+    --muted:#71917c;
+    --line:#234a34;
+    --amber:#ffb400;
+    --green:#39ff7a;
+    --red:#ff4444;
+    --purple:#e14bff;
+    --mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Consolas, "SFMono-Regular", Menlo, monospace;
+    --sans: "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink); font-family:var(--sans);
+    min-height:100vh; padding:18px;
+  }
+  h1{font-size:1.3rem; margin:0 0 4px; letter-spacing:.02em;}
+  h2{font-size:.95rem; color:var(--muted); font-weight:600; margin:0 0 10px;}
+  .tag{
+    display:inline-block; font-family:var(--mono); font-size:.68rem;
+    color:var(--muted); border:1px solid var(--line); border-radius:3px;
+    padding:1px 6px; margin-left:8px; vertical-align:middle;
+  }
+  header{
+    max-width:900px; margin:0 auto 16px; border-bottom:1px solid var(--line);
+    padding-bottom:12px;
+  }
+  header p{margin:2px 0 0; color:var(--muted); font-size:.85rem; max-width:65ch;}
+  .wrap{max-width:900px; margin:0 auto; display:flex; flex-direction:column; gap:16px;}
+  .card{background:var(--board); border:1px solid var(--line); border-radius:10px; padding:16px;}
+  .dropzone{
+    border:2px dashed var(--line); border-radius:8px; padding:26px; text-align:center;
+    color:var(--muted); cursor:pointer; font-size:.85rem;
+  }
+  .dropzone.drag{border-color:var(--amber); color:var(--amber);}
+  input[type=file]{display:none;}
+  .fields{display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin-top:14px;}
+  label{font-size:.72rem; color:var(--muted); display:block; margin-bottom:4px;}
+  input[type=text]{
+    width:100%; background:#081911; color:var(--green); border:1px solid var(--line);
+    border-radius:5px; padding:7px 8px; font-family:var(--mono); font-size:.85rem;
+  }
+  input[type=text]:focus{outline:none; border-color:var(--amber);}
+  .info{
+    margin-top:14px; display:flex; flex-wrap:wrap; gap:18px; font-family:var(--mono); font-size:.78rem;
+  }
+  .info div span.k{display:block; color:var(--muted); font-size:.62rem;}
+  .info div span.v{color:var(--ink); font-size:.95rem;}
+  .warn{color:var(--red); font-size:.78rem; margin-top:8px; font-family:var(--mono);}
+  .toolbar{display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; align-items:center;}
+  button{
+    font-family:var(--sans); font-size:.82rem; color:var(--ink);
+    background:#183826; border:1px solid var(--line); border-radius:5px;
+    padding:8px 14px; cursor:pointer;
+  }
+  button:hover:not(:disabled){border-color:var(--amber); color:var(--amber);}
+  button:disabled{opacity:.35; cursor:not-allowed;}
+  button.primary{background:#1f5236; border-color:#2f7d4f; color:#eaffef; font-weight:600;}
+  button.primary:hover:not(:disabled){border-color:var(--green); color:var(--green);}
+  button.stop{background:#5c1414; border-color:var(--red); color:#ffdada;}
+  .progress-outer{
+    margin-top:14px; background:#081911; border:1px solid var(--line); border-radius:6px;
+    height:20px; overflow:hidden; position:relative;
+  }
+  .progress-inner{
+    height:100%; width:0%; background:var(--purple); box-shadow:0 0 8px var(--purple);
+    transition:width .08s linear;
+  }
+  .progress-lbl{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font-family:var(--mono); font-size:.68rem; color:var(--ink); mix-blend-mode:difference;
+  }
+  .volrow{display:flex; align-items:center; gap:8px; margin-top:12px; font-size:.75rem; color:var(--muted);}
+  .volrow input{flex:1; max-width:200px;}
+  #hexPreview{
+    font-family:var(--mono); font-size:.68rem; color:var(--muted); white-space:pre-wrap;
+    word-break:break-all; margin-top:10px; max-height:180px; overflow:auto;
+    background:#081911; border:1px solid var(--line); border-radius:6px; padding:8px;
+  }
+  details{margin-top:14px; border-top:1px dashed var(--line); padding-top:10px;}
+  summary{cursor:pointer; font-size:.8rem; color:var(--muted);}
+  .refbody{font-size:.78rem; color:var(--muted); line-height:1.6; margin-top:8px;}
+  .refbody code{color:var(--green);}
+  .refbody table{width:100%; border-collapse:collapse; font-family:var(--mono); font-size:.72rem; margin-top:6px;}
+  .refbody td{padding:2px 6px 2px 0;}
+  footer{max-width:900px; margin:22px auto 0; color:var(--muted); font-size:.72rem; text-align:center;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Tape · Enviar .bin por áudio<span class="tag">padrão K7 / Nestor Z80</span></h1>
+  <p>Carregue o <code>.bin</code> exportado pelo emulador do Computador Hipotético 8 bits e gere um áudio para transmitir o programa por som — mesmo esquema de tons (FSK 1kHz/2kHz) usado no carregador de fita <code>k7.z80</code> do projeto Z80.</p>
+</header>
+
+<div class="wrap">
+
+  <section class="card">
+    <h2>1. Arquivo</h2>
+    <div class="dropzone" id="dropzone">
+      Arraste um arquivo <code>.bin</code> aqui, ou clique para escolher
+      <input type="file" id="fileInput" accept=".bin">
+    </div>
+    <div class="warn" id="fileWarn"></div>
+
+    <div class="fields">
+      <div>
+        <label>Título (até 2 caracteres)</label>
+        <input type="text" id="titleInput" maxlength="2" value="8B">
+      </div>
+      <div>
+        <label>Endereço inicial (hex)</label>
+        <input type="text" id="startInput" value="00">
+      </div>
+      <div>
+        <label>Endereço final (hex, inclusive)</label>
+        <input type="text" id="endInput" value="FF">
+      </div>
+    </div>
+
+    <div class="info">
+      <div><span class="k">bytes carregados</span><span class="v" id="infoLen">—</span></div>
+      <div><span class="k">bytes a enviar</span><span class="v" id="infoRange">—</span></div>
+      <div><span class="k">checksum</span><span class="v" id="infoChk">—</span></div>
+      <div><span class="k">duração estimada</span><span class="v" id="infoDur">—</span></div>
+    </div>
+
+    <pre id="hexPreview">— carregue um arquivo .bin —</pre>
+  </section>
+
+  <section class="card">
+    <h2>2. Gerar e enviar</h2>
+    <div class="toolbar">
+      <button class="primary" id="btnGenerate" disabled>Gerar áudio</button>
+      <button id="btnPlay" disabled>▶ Reproduzir</button>
+      <button id="btnStop" class="stop" disabled>■ Parar</button>
+      <button id="btnWav" disabled>Baixar .wav</button>
+    </div>
+    <div class="volrow">
+      <span>Volume</span>
+      <input type="range" id="volume" min="0" max="100" value="90">
+    </div>
+    <div class="progress-outer">
+      <div class="progress-inner" id="progressBar"></div>
+      <div class="progress-lbl" id="progressLbl">parado</div>
+    </div>
+    <div id="selfTestResult" style="margin-top:10px; font-family:var(--mono); font-size:.78rem;"></div>
+  </section>
+
+  <section class="card">
+    <h2>3. Calibração do módulo de áudio (opcional)</h2>
+    <p style="color:var(--muted); font-size:.82rem; margin-top:0;">
+      Se você estiver usando um módulo tipo <code>KY-038</code>/<code>LM393</code>
+      (só 3 pinos: 5V, GND, OUT), o ganho é ajustado no trimpot do próprio
+      módulo. Toque um tom contínuo aqui, ligue o <code>MODO_DIAGNOSTICO</code>
+      no <code>tape.ino</code> e gire o trimpot até os valores impressos no
+      Serial ficarem estáveis e próximos do esperado (~500µs para 1kHz,
+      ~250µs para 2kHz).
+    </p>
+    <div class="toolbar">
+      <button id="btnTone1k">🔊 Tocar 1kHz contínuo</button>
+      <button id="btnTone2k">🔊 Tocar 2kHz contínuo</button>
+      <button id="btnToneStop" class="stop" disabled>■ Parar tom</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>Como funciona o protocolo (referência)</summary>
+      <div class="refbody">
+        <p>Mesma codificação usada no carregador de fita <code>k7.z80</code>: dois tons,
+        <b>1 kHz</b> e <b>2 kHz</b>. Cada bit é uma sequência de ciclos das duas
+        frequências, sempre com a <b>mesma duração total (6 ms)</b> — só muda a proporção
+        entre elas:</p>
+        <table>
+          <tr><td>bit 0</td><td>8 ciclos @2kHz + 2 ciclos @1kHz</td></tr>
+          <tr><td>bit 1</td><td>4 ciclos @2kHz + 4 ciclos @1kHz</td></tr>
+        </table>
+        <p>Cada byte é enviado como no formato serial clássico: <code>start(0)</code> +
+        8 bits de dado (<b>LSB primeiro</b>) + <code>stop(1)</code> — 10 bits = 60 ms/byte.</p>
+        <p>Estrutura completa do áudio:</p>
+        <table>
+          <tr><td>Leader (sincronismo)</td><td>4000 ciclos @1kHz (~4s)</td></tr>
+          <tr><td>Cabeçalho</td><td>7 bytes: título(2) + endereço inicial(2) + endereço final(2) + checksum(1)</td></tr>
+          <tr><td>Gap</td><td>2000 ciclos @2kHz (~1s)</td></tr>
+          <tr><td>Dados</td><td>bytes do endereço inicial ao final, inclusive</td></tr>
+          <tr><td>Trailer</td><td>4000 ciclos @2kHz (~2s)</td></tr>
+        </table>
+        <p>O checksum é a soma (mod 256) de todos os bytes de dados enviados.</p>
+        <p><b>Importante:</b> esta página só <i>gera e toca o áudio</i> (é a "gravação/transmissão").
+        Para o Computador Hipotético 8 bits carregar o programa de volta, o firmware do
+        Arduino precisa de uma rotina de leitura equivalente a <code>PERIOD</code>/<code>LEBIT</code>/<code>LEBYTE</code>
+        do <code>k7.z80</code> — ainda não implementada neste projeto.</p>
+      </div>
+    </details>
+  </section>
+
+</div>
+
+<footer>Tape 8 bits — gerador de áudio local, sem internet, compatível com o padrão K7/Nestor Z80.</footer>
+
+<script>
+"use strict";
+
+/* ============================================================
+   PROTOCOLO (constantes do k7.z80)
+   ============================================================ */
+const F1 = 1000, F2 = 2000;           // "1kHz" e "2kHz"
+const ZERO_2K = 8, ZERO_1K = 2;       // bit 0
+const UM_2K = 4, UM_1K = 4;           // bit 1
+const LEADER_CYCLES = 4000;           // @F1
+const GAP_CYCLES = 2000;              // @F2
+const TRAILER_CYCLES = 4000;          // @F2
+// Nota: a taxa de amostragem NUNCA é fixada aqui — sempre usamos
+// ctx.sampleRate (a taxa real do dispositivo/navegador). Um valor
+// fixo (ex.: 44100) faria o navegador reamostrar o áudio quando o
+// hardware roda em outra taxa (48000 é comum), o que borra as
+// bordas da onda quadrada e atrapalha a decodificação no Arduino.
+
+let fileBytes = null;      // Uint8Array do .bin carregado
+let audioCtx = null;
+let currentBuffer = null;  // AudioBuffer gerado
+let sourceNode = null;
+let playStartTime = 0;
+let rafHandle = null;
+
+/* ============================================================
+   MONTAGEM DOS TONS
+   ============================================================ */
+function pushBit(segs, bit){
+  if(bit){
+    segs.push([F2, UM_2K]);
+    segs.push([F1, UM_1K]);
+  } else {
+    segs.push([F2, ZERO_2K]);
+    segs.push([F1, ZERO_1K]);
+  }
+}
+function pushByte(segs, byteVal){
+  pushBit(segs, 0); // start
+  for(let i=0;i<8;i++) pushBit(segs, (byteVal>>i)&1); // LSB primeiro
+  pushBit(segs, 1); // stop
+}
+function buildSegments(header, data){
+  const segs = [];
+  segs.push([F1, LEADER_CYCLES]);
+  header.forEach(b=>pushByte(segs,b));
+  segs.push([F2, GAP_CYCLES]);
+  data.forEach(b=>pushByte(segs,b));
+  segs.push([F2, TRAILER_CYCLES]);
+  return segs;
+}
+function segmentsDuration(segs){
+  let t=0;
+  for(const [f,cycles] of segs) t += cycles/f;
+  return t;
+}
+function renderSamples(segs, amplitude, sampleRate){
+  const totalSec = segmentsDuration(segs);
+  const totalSamples = Math.ceil(totalSec*sampleRate);
+  const data = new Float32Array(totalSamples);
+  let idx = 0;
+  for(const [freq,cycles] of segs){
+    const halfSamples = Math.max(1, Math.round((1/freq/2)*sampleRate));
+    let level = 1;
+    const halves = cycles*2;
+    for(let h=0; h<halves; h++){
+      const end = Math.min(idx+halfSamples, totalSamples);
+      for(; idx<end; idx++) data[idx] = level*amplitude;
+      level = -level;
+    }
+  }
+  return data.subarray(0, idx);
+}
+
+/* ============================================================
+   VERIFICAÇÃO DE FORMATO (simula o decodificador do tape.ino)
+   ============================================================
+   Extrai, das amostras de áudio REALMENTE geradas, a duração de
+   cada pulso "alto" (em microssegundos) — exatamente o que
+   pulseIn(pin, HIGH, ...) mediria no Arduino — e roda o MESMO
+   algoritmo de decodificação do tape.ino sobre essa lista de
+   pulsos. Se o resultado bater com o arquivo original, o áudio
+   está garantidamente no formato que o receptor espera.
+*/
+function extractPulses(samples, sampleRate){
+  const pulses = [];
+  let i = 0;
+  const n = samples.length;
+  while(i<n && samples[i] <= 0) i++; // pula eventual início não-positivo
+  while(i<n){
+    if(samples[i] > 0){
+      const startIdx = i;
+      while(i<n && samples[i] > 0) i++;
+      pulses.push(Math.round((i-startIdx) / sampleRate * 1e6)); // duração em us
+    } else {
+      i++;
+    }
+  }
+  return pulses;
+}
+
+function decodeSelfTest(pulses){
+  let idx = 0;
+  function raw(){ return idx < pulses.length ? pulses[idx++] : 0; }
+  let pendingVal = null;
+  function next(){
+    if(pendingVal !== null){ const v = pendingVal; pendingVal = null; return v; }
+    return raw();
+  }
+  function pushBack(v){ pendingVal = v; }
+  const isShortUs = us => us>0 && us<375;
+  const isLongUs = us => us>=375;
+
+  function waitLeader(){
+    let longRun=0;
+    while(true){
+      const p = raw();
+      if(p===0) return false;
+      if(isLongUs(p)){ longRun++; if(longRun>=100) break; }
+      else longRun=0;
+    }
+    while(true){
+      const p = raw();
+      if(p===0) return false;
+      if(isShortUs(p)){ pushBack(p); return true; }
+    }
+  }
+  function readBit(){
+    let shorts=0;
+    while(true){
+      const p = next();
+      if(p===0) return -1;
+      if(isShortUs(p)) shorts++; else break;
+    }
+    const bit = shorts>=6 ? 0 : 1;
+    const totalLongs = bit===0 ? 2 : 4;
+    for(let i=0;i<totalLongs-1;i++){ const p=next(); if(p===0) return -1; }
+    return bit;
+  }
+  function readByte(){
+    if(readBit()!==0) return -1;
+    let v=0;
+    for(let i=0;i<8;i++){ const b=readBit(); if(b<0) return -1; if(b) v|=(1<<i); }
+    if(readBit()!==1) return -1;
+    return v;
+  }
+
+  if(!waitLeader()) return {ok:false, error:'não sincronizou no leader'};
+  const header=[];
+  for(let i=0;i<7;i++){
+    const b = readByte();
+    if(b<0) return {ok:false, error:'erro no cabeçalho (byte '+i+')'};
+    header.push(b);
+  }
+  const start = header[2] | (header[3]<<8);
+  const end = header[4] | (header[5]<<8);
+  const chkExpected = header[6];
+  if(start>end || end>255) return {ok:false, error:'faixa de endereços inválida no cabeçalho decodificado'};
+  const data=[];
+  for(let addr=start; addr<=end; addr++){
+    const b = readByte();
+    if(b<0) return {ok:false, error:'erro nos dados (endereço 0x'+addr.toString(16)+')'};
+    data.push(b);
+  }
+  let sum=0; for(const b of data) sum=(sum+b)&0xFF;
+  if(sum !== chkExpected) return {ok:false, error:'checksum não confere (esperado 0x'+chkExpected.toString(16)+', calculado 0x'+sum.toString(16)+')'};
+  return {ok:true, header, start, end, data};
+}
+
+function runSelfTest(segs, header, dataArr){
+  const el = document.getElementById('selfTestResult');
+  el.style.color = 'var(--muted)';
+  el.textContent = 'Verificando formato (simulando o tape.ino)...';
+
+  // usa amplitude cheia (independente do volume escolhido) para o teste,
+  // já que aqui o que importa é a forma dos pulsos, não o volume de audição.
+  const sr = ensureCtx().sampleRate;
+  const samples = renderSamples(segs, 1.0, sr);
+  const pulses = extractPulses(samples, sr);
+  const result = decodeSelfTest(pulses);
+
+  if(!result.ok){
+    el.style.color = 'var(--red)';
+    el.textContent = '✗ Falha na verificação: ' + result.error + ' — este áudio pode não ser lido corretamente pelo tape.ino.';
+    return;
+  }
+
+  const headerOk = header.length===result.header.length && header.every((v,i)=>v===result.header[i]);
+  const dataOk = dataArr.length===result.data.length && Array.from(dataArr).every((v,i)=>v===result.data[i]);
+
+  if(headerOk && dataOk){
+    el.style.color = 'var(--green)';
+    el.textContent = '✓ Verificado: ' + result.data.length + ' bytes decodificados batem 100% com o arquivo original — formato compatível com o tape.ino.';
+  } else {
+    el.style.color = 'var(--red)';
+    el.textContent = '✗ Falha na verificação: ' + (!headerOk ? 'cabeçalho decodificado diferente do enviado' : 'dados decodificados diferentes dos enviados') + '.';
+  }
+}
+
+/* ============================================================
+   ARQUIVO
+   ============================================================ */
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+dropzone.addEventListener('click', ()=> fileInput.click());
+['dragover','dragenter'].forEach(ev=> dropzone.addEventListener(ev, e=>{ e.preventDefault(); dropzone.classList.add('drag'); }));
+['dragleave','drop'].forEach(ev=> dropzone.addEventListener(ev, e=>{ e.preventDefault(); dropzone.classList.remove('drag'); }));
+dropzone.addEventListener('drop', e=>{
+  const f = e.dataTransfer.files[0];
+  if(f) loadFile(f);
+});
+fileInput.addEventListener('change', e=>{
+  const f = e.target.files[0];
+  if(f) loadFile(f);
+});
+
+function loadFile(file){
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    let bytes = new Uint8Array(reader.result);
+    const warnEl = document.getElementById('fileWarn');
+    warnEl.textContent = '';
+    if(bytes.length > 256){
+      warnEl.textContent = 'Arquivo tem ' + bytes.length + ' bytes; usando só os primeiros 256 (memória do computador).';
+      bytes = bytes.slice(0,256);
+    }
+    fileBytes = bytes;
+    dropzone.textContent = file.name + ' (' + bytes.length + ' bytes) — clique para trocar';
+    document.getElementById('infoLen').textContent = bytes.length + ' bytes';
+    document.getElementById('endInput').value = (bytes.length-1).toString(16).padStart(2,'0').toUpperCase();
+    document.getElementById('startInput').value = '00';
+    document.getElementById('btnGenerate').disabled = false;
+    updatePreview();
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function parseHexByte(str, fallback){
+  const v = parseInt(String(str).replace('$','').replace(/^0x/i,''), 16);
+  return isNaN(v) ? fallback : (v & 0xFF);
+}
+
+function updatePreview(){
+  if(!fileBytes) return;
+  const start = parseHexByte(document.getElementById('startInput').value, 0);
+  const end = parseHexByte(document.getElementById('endInput').value, fileBytes.length-1);
+  const pre = document.getElementById('hexPreview');
+  if(end < start || end >= fileBytes.length){
+    document.getElementById('infoRange').textContent = '—';
+    document.getElementById('infoChk').textContent = '—';
+    document.getElementById('infoDur').textContent = '—';
+    pre.textContent = 'Endereço final inválido (deve ser >= inicial e < ' + fileBytes.length + ').';
+    document.getElementById('btnGenerate').disabled = true;
+    return;
+  }
+  document.getElementById('btnGenerate').disabled = false;
+  const data = fileBytes.slice(start, end+1);
+  let sum = 0;
+  for(const b of data) sum = (sum + b) & 0xFF;
+  document.getElementById('infoRange').textContent = data.length + ' bytes (0x' + start.toString(16).padStart(2,'0').toUpperCase() + '–0x' + end.toString(16).padStart(2,'0').toUpperCase() + ')';
+  document.getElementById('infoChk').textContent = '0x' + sum.toString(16).padStart(2,'0').toUpperCase();
+
+  const header = buildHeader(start, end, sum);
+  const segs = buildSegments(header, data);
+  const dur = segmentsDuration(segs);
+  document.getElementById('infoDur').textContent = dur.toFixed(1) + ' s';
+
+  let lines = [];
+  for(let i=0;i<data.length;i+=16){
+    const chunk = Array.from(data.slice(i,i+16)).map(b=>b.toString(16).padStart(2,'0').toUpperCase());
+    lines.push((start+i).toString(16).padStart(2,'0').toUpperCase() + ':  ' + chunk.join(' '));
+  }
+  pre.textContent = lines.join('\n');
+}
+
+function buildHeader(start, end, checksum){
+  const t = document.getElementById('titleInput').value || '';
+  const t0 = t.length>0 ? t.charCodeAt(0)&0xFF : 0x20;
+  const t1 = t.length>1 ? t.charCodeAt(1)&0xFF : 0x20;
+  return [t0, t1, start&0xFF, (start>>8)&0xFF, end&0xFF, (end>>8)&0xFF, checksum&0xFF];
+}
+
+['titleInput','startInput','endInput'].forEach(id=>{
+  document.getElementById(id).addEventListener('input', updatePreview);
+});
+
+/* ============================================================
+   GERAÇÃO / REPRODUÇÃO
+   ============================================================ */
+function ensureCtx(){
+  if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  return audioCtx;
+}
+
+/* ============================================================
+   TOM CONTÍNUO (calibração de hardware)
+   ============================================================ */
+let toneOsc = null, toneGain = null;
+
+function playTone(freq){
+  stopTone();
+  stopPlayback();
+  const ctx = ensureCtx();
+  if(ctx.state === 'suspended') ctx.resume();
+  toneOsc = ctx.createOscillator();
+  toneOsc.type = 'square';
+  toneOsc.frequency.value = freq;
+  toneGain = ctx.createGain();
+  toneGain.gain.value = (+document.getElementById('volume').value)/100;
+  toneOsc.connect(toneGain).connect(ctx.destination);
+  toneOsc.start();
+  document.getElementById('btnToneStop').disabled = false;
+}
+
+function stopTone(){
+  if(toneOsc){
+    try{ toneOsc.stop(); }catch(e){}
+    toneOsc.disconnect();
+    toneOsc = null;
+  }
+  document.getElementById('btnToneStop').disabled = true;
+}
+
+document.getElementById('btnTone1k').addEventListener('click', ()=> playTone(F1));
+document.getElementById('btnTone2k').addEventListener('click', ()=> playTone(F2));
+document.getElementById('btnToneStop').addEventListener('click', stopTone);
+
+document.getElementById('btnGenerate').addEventListener('click', ()=>{
+  if(!fileBytes) return;
+  const start = parseHexByte(document.getElementById('startInput').value, 0);
+  const end = parseHexByte(document.getElementById('endInput').value, fileBytes.length-1);
+  if(end < start || end >= fileBytes.length) return;
+  const data = fileBytes.slice(start, end+1);
+  let sum = 0;
+  for(const b of data) sum = (sum + b) & 0xFF;
+  const header = buildHeader(start, end, sum);
+  const segs = buildSegments(header, data);
+  const amplitude = (+document.getElementById('volume').value)/100;
+
+  const ctx = ensureCtx();
+  const sr = ctx.sampleRate; // usa a taxa REAL do dispositivo, nunca um valor fixo
+  const samples = renderSamples(segs, amplitude, sr);
+  const buffer = ctx.createBuffer(1, samples.length, sr);
+  buffer.copyToChannel(samples, 0);
+  currentBuffer = buffer;
+
+  document.getElementById('btnPlay').disabled = false;
+  document.getElementById('btnWav').disabled = false;
+  document.getElementById('progressLbl').textContent = 'pronto — ' + buffer.duration.toFixed(1) + ' s';
+  document.getElementById('progressBar').style.width = '0%';
+
+  runSelfTest(segs, header, data);
+});
+
+document.getElementById('btnPlay').addEventListener('click', ()=>{
+  if(!currentBuffer) return;
+  const ctx = ensureCtx();
+  if(ctx.state === 'suspended') ctx.resume();
+  stopTone();
+  stopPlayback();
+  sourceNode = ctx.createBufferSource();
+  sourceNode.buffer = currentBuffer;
+  sourceNode.connect(ctx.destination);
+  sourceNode.onended = ()=>{
+    document.getElementById('progressLbl').textContent = 'concluído';
+    document.getElementById('btnStop').disabled = true;
+    if(rafHandle) cancelAnimationFrame(rafHandle);
+  };
+  sourceNode.start();
+  playStartTime = ctx.currentTime;
+  document.getElementById('btnStop').disabled = false;
+  updateProgress();
+});
+
+document.getElementById('btnStop').addEventListener('click', stopPlayback);
+
+function stopPlayback(){
+  if(sourceNode){
+    try{ sourceNode.onended = null; sourceNode.stop(); }catch(e){}
+    sourceNode = null;
+  }
+  if(rafHandle) cancelAnimationFrame(rafHandle);
+  document.getElementById('btnStop').disabled = true;
+  document.getElementById('progressBar').style.width = '0%';
+  document.getElementById('progressLbl').textContent = 'parado';
+}
+
+function updateProgress(){
+  if(!sourceNode || !currentBuffer) return;
+  const elapsed = audioCtx.currentTime - playStartTime;
+  const pct = Math.min(100, (elapsed/currentBuffer.duration)*100);
+  document.getElementById('progressBar').style.width = pct + '%';
+  document.getElementById('progressLbl').textContent = elapsed.toFixed(1) + ' / ' + currentBuffer.duration.toFixed(1) + ' s';
+  if(pct < 100) rafHandle = requestAnimationFrame(updateProgress);
+}
+
+/* ============================================================
+   EXPORTAR .WAV
+   ============================================================ */
+function bufferToWav(buffer){
+  const samples = buffer.getChannelData(0);
+  const sampleRate = buffer.sampleRate;
+  const blockAlign = 2, byteRate = sampleRate*blockAlign;
+  const dataSize = samples.length*2;
+  const arr = new ArrayBuffer(44+dataSize);
+  const view = new DataView(arr);
+  function writeStr(offset,str){ for(let i=0;i<str.length;i++) view.setUint8(offset+i, str.charCodeAt(i)); }
+  writeStr(0,'RIFF'); view.setUint32(4, 36+dataSize, true); writeStr(8,'WAVE');
+  writeStr(12,'fmt '); view.setUint32(16,16,true); view.setUint16(20,1,true);
+  view.setUint16(22,1,true); view.setUint32(24,sampleRate,true);
+  view.setUint32(28,byteRate,true); view.setUint16(32,blockAlign,true); view.setUint16(34,16,true);
+  writeStr(36,'data'); view.setUint32(40,dataSize,true);
+  let offset=44;
+  for(let i=0;i<samples.length;i++){
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s<0 ? s*0x8000 : s*0x7FFF, true);
+    offset += 2;
+  }
+  return new Blob([view], {type:'audio/wav'});
+}
+
+document.getElementById('btnWav').addEventListener('click', ()=>{
+  if(!currentBuffer) return;
+  const blob = bufferToWav(currentBuffer);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'tape.wav';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+</script>
+</body>
+</html>
