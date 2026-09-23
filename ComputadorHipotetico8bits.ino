@@ -62,6 +62,39 @@
 #define inClr  A3
 #define inIncr 9
 
+#define TAPE_PIN 10
+#define LED_PIN 13
+// Larguras de pulso esperadas (meio-ciclo, em microssegundos).
+// O tape.html gera onda quadrada com F1=1000Hz e F2=2000Hz, ou
+// seja, meio-ciclo de 500us (1kHz) e 250us (2kHz).
+#define SHORT_US     250UL   // meio-ciclo @2kHz ("curto")
+#define LONG_US      500UL   // meio-ciclo @1kHz ("longo")
+#define THRESH_US    450UL   // limiar entre curto e longo (calibrado com hardware real)
+
+// Quantos ciclos curtos/longos formam cada bit (mesmos valores
+// usados no tape.html / k7.z80): ambos os bits duram o mesmo
+// tempo total, só muda a proporção entre as duas frequências.
+#define ZERO_SHORTS  8
+#define ZERO_LONGS   2
+#define UM_SHORTS    4
+#define UM_LONGS     4
+
+// Tempo máximo de espera por um pulso antes de considerar que
+// o sinal sumiu (silêncio / fim de transmissão / erro).
+#define PULSE_TIMEOUT_US   5000UL
+
+// Quantos meios-ciclos longos seguidos são necessários para dar
+// como "sincronizado" no tom de sincronismo (leader) de 1kHz.
+#define LEADER_LOCK_CYCLES 100
+
+// Quantos pulsos curtos SEGUIDOS exigimos antes de aceitar que o
+// leader terminou. O bit de start é sempre 0 (sempre 8 curtos
+// seguidos), então dá pra exigir até 6 sem risco de rejeitar uma
+// transição de verdade — e isso filtra ruído/solavanco isolado.
+#define LEADER_FIM_CONFIRMACOES 6
+
+#define MEM_SIZE 256
+
 // led saida (OUTA)
 #define ledOutAddr 0x20
 //#define ledOutI2C A4
@@ -442,6 +475,10 @@ void setup() {
   pinMode(CLOCK_PIN, OUTPUT);
   pinMode(LATCH_PIN, OUTPUT);
 
+  // TAPE_PIN
+  pinMode(TAPE_PIN, INPUT);
+  pinMode(LED_PIN, OUTPUT);
+
   // ----------------------------------------------------------
   // Estado inicial
   // ----------------------------------------------------------
@@ -453,7 +490,7 @@ void setup() {
 
   Serial.println();
   Serial.println("==============================");
-  Serial.println(" CPU 8 BITS v2.1");
+  Serial.println(" CPU 8 BITS v2.2");
   Serial.println("==============================");
   Serial.println("CPU pronta.");
 }
@@ -527,6 +564,256 @@ void ledOutSend(byte x) {
   Wire.write(~x);
   Wire.endTransmission();
 }
+
+
+
+
+unsigned long medirPulso() {
+  return pulseIn(TAPE_PIN, LOW, PULSE_TIMEOUT_US);
+}
+
+bool ehCurto(unsigned long us) {
+  return us > 0 && us < THRESH_US;
+}
+
+bool ehLongo(unsigned long us) {
+  return us >= THRESH_US;
+}
+
+// ------------------------------------------------------------
+// Fila pequena de pulsos "devolvidos" (só usada na transição
+// entre o leader e o primeiro bit do cabeçalho).
+// ------------------------------------------------------------
+
+#define PENDENTES_MAX 8
+unsigned long filaPendente[PENDENTES_MAX];
+int pendenteQtd = 0;
+int pendentePos = 0;
+
+void devolverVarios(unsigned long *valores, int n) {
+  for (int i = 0; i < n && i < PENDENTES_MAX; i++) filaPendente[i] = valores[i];
+  pendenteQtd = n;
+  pendentePos = 0;
+}
+
+
+unsigned long proximoPulso() {
+  if (pendentePos < pendenteQtd) {
+    return filaPendente[pendentePos++];
+  }
+  return medirPulso();
+}
+
+bool esperarLeader() {
+  int longosSeguidos = 0;
+  unsigned long p;
+
+  while (true) {
+    p = medirPulso();
+    if (p == 0) { longosSeguidos = 0; continue; }
+    if (ehLongo(p)) {
+      longosSeguidos++;
+      if (longosSeguidos >= LEADER_LOCK_CYCLES) break;
+    } else {
+      longosSeguidos = 0;
+    }
+  }
+
+  unsigned long confirmacao[LEADER_FIM_CONFIRMACOES];
+  int confirmadas = 0;
+
+  while (true) {
+    p = medirPulso();
+    if (p == 0) return false;
+
+    if (ehCurto(p)) {
+      confirmacao[confirmadas++] = p;
+      if (confirmadas >= LEADER_FIM_CONFIRMACOES) {
+        devolverVarios(confirmacao, confirmadas);
+        return true;
+      }
+    } else {
+      confirmadas = 0;
+    }
+  }
+}
+
+
+// ============================================================
+// DECODIFICAÇÃO DE BITS / BYTES
+// ============================================================
+
+// Guarda, de forma leve (sem array grande), qual foi o último bit
+// lido — rótulo + contagem de curtos — só pra dar uma pista de
+// diagnóstico quando um byte falha, sem gastar RAM com buffers.
+const char* ultimoRotulo = "";
+int ultimoCurtos = -1;
+
+int lerBit(const char* rotulo) {
+  int curtos = 0;
+  unsigned long p;
+
+  while (true) {
+    p = proximoPulso();
+    if (p == 0) {
+      ultimoRotulo = rotulo;
+      ultimoCurtos = curtos;
+      return -1; // timeout: sinal sumiu
+    }
+    if (ehCurto(p)) {
+      curtos++;
+    } else {
+      break; // pulso longo: fim da rajada curta deste bit
+    }
+  }
+
+  int bit = (curtos >= 6) ? 0 : 1;
+
+  int totalLongos = (bit == 0) ? ZERO_LONGS : UM_LONGS;
+  int faltam = totalLongos - 1;
+  for (int i = 0; i < faltam; i++) {
+    p = proximoPulso();
+    if (p == 0) {
+      ultimoRotulo = rotulo;
+      ultimoCurtos = curtos;
+      return -1;
+    }
+  }
+
+  ultimoRotulo = rotulo;
+  ultimoCurtos = curtos;
+  return bit;
+}
+
+#define ERRO_START  -1
+#define ERRO_BIT    -2
+#define ERRO_STOP   -3
+
+const char* descreverErro(int codigo) {
+  switch (codigo) {
+    case ERRO_START: return "start bit veio != 0";
+    case ERRO_BIT:    return "timeout no meio do byte";
+    case ERRO_STOP:   return "stop bit veio != 1";
+    default:          return "erro desconhecido";
+  }
+}
+
+int lerByte() {
+  int start = lerBit("start");
+  if (start != 0) return ERRO_START;
+
+  int valor = 0;
+  static const char* rotulosDado[8] = {"dado0","dado1","dado2","dado3","dado4","dado5","dado6","dado7"};
+  for (int i = 0; i < 8; i++) {
+    int b = lerBit(rotulosDado[i]);
+    if (b < 0) return ERRO_BIT;
+    if (b) valor |= (1 << i);
+  }
+
+  int stop = lerBit("stop");
+  if (stop != 1) return ERRO_STOP;
+
+  return valor;
+}
+
+
+struct ResultadoCarga {
+  bool ok;
+  byte titulo0, titulo1;
+  int enderecoInicial, enderecoFinal;
+  byte checksumEsperado, checksumCalculado;
+};
+
+
+ResultadoCarga resultado;
+
+bool carregarFita() {
+  resultado.ok = false;
+
+  Serial.println();
+  Serial.println(F("Aguardando tom de sincronismo (leader)..."));
+  digitalWrite(LED_PIN, LOW);
+
+  if (!esperarLeader()) {
+    Serial.println(F("ERRO: nao sincronizou no leader."));
+    return false;
+  }
+
+  Serial.println(F("Sincronizado! Lendo cabecalho..."));
+  digitalWrite(LED_PIN, HIGH);
+
+  byte cabecalho[7];
+  for (int i = 0; i < 7; i++) {
+    int b = lerByte();
+    if (b < 0) {
+      //Serial.print(F("ERRO no cabecalho, byte "));
+      //Serial.print(i);
+      //Serial.print(F(" -> "));
+      //Serial.print(descreverErro(b));
+      //Serial.print(F(" (ultimo bit: "));
+      //Serial.print(ultimoRotulo);
+      //Serial.print(F(", "));
+      //Serial.print(ultimoCurtos);
+      //Serial.println(F(" curtos)"));
+      return false;
+    }
+    cabecalho[i] = (byte)b;
+  }
+
+  resultado.titulo0 = cabecalho[0];
+  resultado.titulo1 = cabecalho[1];
+  resultado.enderecoInicial = cabecalho[2] | (cabecalho[3] << 8);
+  resultado.enderecoFinal   = cabecalho[4] | (cabecalho[5] << 8);
+  resultado.checksumEsperado = cabecalho[6];
+
+  Serial.print(F("Titulo: "));
+  Serial.write(resultado.titulo0); Serial.write(resultado.titulo1); Serial.println();
+  //Serial.print(F("Endereco inicial: 0x"));
+  //Serial.println(resultado.enderecoInicial, HEX);
+  //Serial.print(F("Endereco final:   0x"));
+  //Serial.println(resultado.enderecoFinal, HEX);
+
+  if (resultado.enderecoInicial > resultado.enderecoFinal ||
+      resultado.enderecoFinal >= MEM_SIZE) {
+    //Serial.println(F("ERRO: faixa de enderecos invalida."));
+    return false;
+  }
+
+  Serial.println(F("Lendo dados..."));
+  byte soma = 0;
+  for (int iAddr = resultado.enderecoInicial; iAddr <= resultado.enderecoFinal; iAddr++) {
+    int b = lerByte();
+    if (b < 0) {
+      //Serial.print(F("ERRO nos dados, endereco 0x"));
+      //Serial.print(addr, HEX);
+      //Serial.print(F(" -> "));
+      //Serial.println(descreverErro(b));
+      return false;
+    }
+    memory[iAddr] = (byte)b;
+    soma = (byte)(soma + b);
+
+    if ((iAddr & 0x0F) == 0) digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+    
+    data = (byte)b;
+    addr = iAddr;
+    atualizar595();
+  }
+
+  resultado.checksumCalculado = soma;
+
+  if (resultado.checksumCalculado != resultado.checksumEsperado) {
+    //Serial.print(F("ERRO: checksum nao confere. esperado=0x"));
+    //Serial.print(resultado.checksumEsperado, HEX);
+    //Serial.print(F(" calculado=0x"));
+    //Serial.println(resultado.checksumCalculado, HEX);
+    return false;
+  }
+
+  resultado.ok = true;
+  return true;
+}
+
 
 void loadSaveMemory() {
   // leds
@@ -2027,6 +2314,7 @@ void leEntradasControles() {
             break;
           }
 
+         
           // --------------------------------------------------
           // HALT
           // --------------------------------------------------
@@ -2111,6 +2399,24 @@ void leEntradasControles() {
         // ====================================================
 
         case inAddr:
+
+          // --------------------------------------------------
+          // INPUT IR CLR(hold)+ADDR
+          // --------------------------------------------------
+          if (digitalRead(inClr) == LOW) {
+             ioWaiting = true;
+             memMode = true;
+             atualizarControle();
+             atualizar595();
+  
+            bool ok = carregarFita();
+            resetCPU();
+            addr = 0;
+            data = memory[addr];
+            atualizar595();
+            break;
+          }
+          
 
           if (cpuState == CPU_STOPPED) {
 
