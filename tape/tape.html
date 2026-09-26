@@ -111,6 +111,9 @@
       Arraste um arquivo <code>.bin</code> aqui, ou clique para escolher
       <input type="file" id="fileInput" accept=".bin">
     </div>
+    <div class="toolbar">
+      <button id="btnPaste" title="Cola um binário em hex copiado pelo emulador (botão Copiar Bin). Ctrl+V na página também funciona.">📋 Colar binário</button>
+    </div>
     <div class="warn" id="fileWarn"></div>
 
     <div class="fields">
@@ -427,24 +430,64 @@ fileInput.addEventListener('change', e=>{
 
 function loadFile(file){
   const reader = new FileReader();
-  reader.onload = ()=>{
-    let bytes = new Uint8Array(reader.result);
+  reader.onload = ()=> loadBytes(new Uint8Array(reader.result), file.name);
+  reader.readAsArrayBuffer(file);
+}
+
+function loadBytes(bytes, name){
     const warnEl = document.getElementById('fileWarn');
     warnEl.textContent = '';
     if(bytes.length > 256){
-      warnEl.textContent = 'Arquivo tem ' + bytes.length + ' bytes; usando só os primeiros 256 (memória do computador).';
+      warnEl.textContent = 'Binário tem ' + bytes.length + ' bytes; usando só os primeiros 256 (memória do computador).';
       bytes = bytes.slice(0,256);
     }
     fileBytes = bytes;
-    dropzone.textContent = file.name + ' (' + bytes.length + ' bytes) — clique para trocar';
+    dropzone.textContent = name + ' (' + bytes.length + ' bytes) — clique para trocar';
     document.getElementById('infoLen').textContent = bytes.length + ' bytes';
     document.getElementById('endInput').value = (bytes.length-1).toString(16).padStart(2,'0').toUpperCase();
     document.getElementById('startInput').value = '00';
     document.getElementById('btnGenerate').disabled = false;
     updatePreview();
-  };
-  reader.readAsArrayBuffer(file);
 }
+
+/* ============================================================
+   COLAR BINÁRIO (texto hex vindo do botão "Copiar Bin")
+   Aceita: 3E01D302..., "3E 01 D3 02", "$3E,$01", "0x3E 0x01", várias linhas
+   ============================================================ */
+function parseHexString(str){
+  const s = String(str).replace(/0x/gi,'').replace(/[\s,$;:]/g,'');
+  if(!s) throw new Error('nada para colar');
+  if(!/^[0-9a-fA-F]+$/.test(s)) throw new Error('o texto colado tem caracteres que não são hex');
+  if(s.length % 2) throw new Error('número ímpar de dígitos hex (' + s.length + ')');
+  const out = new Uint8Array(s.length/2);
+  for(let i=0;i<out.length;i++) out[i] = parseInt(s.substr(i*2,2),16);
+  return out;
+}
+
+function colarTexto(txt){
+  try{
+    loadBytes(parseHexString(txt), 'binário colado');
+  }catch(e){
+    document.getElementById('fileWarn').textContent = 'Não foi possível colar: ' + e.message + '.';
+  }
+}
+
+document.getElementById('btnPaste').addEventListener('click', async ()=>{
+  let txt = null;
+  try{
+    if(navigator.clipboard && navigator.clipboard.readText) txt = await navigator.clipboard.readText();
+  }catch(e){ /* sem permissão: cai no prompt */ }
+  if(!txt) txt = prompt('Cole aqui o binário em hex (ex.: 3E01D302CD06...):');
+  if(txt) colarTexto(txt);
+});
+
+// Ctrl+V em qualquer lugar da página (fora dos campos de texto) também carrega
+document.addEventListener('paste', e=>{
+  const t = e.target;
+  if(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+  const txt = (e.clipboardData || window.clipboardData).getData('text');
+  if(txt){ e.preventDefault(); colarTexto(txt); }
+});
 
 function parseHexByte(str, fallback){
   const v = parseInt(String(str).replace('$','').replace(/^0x/i,''), 16);

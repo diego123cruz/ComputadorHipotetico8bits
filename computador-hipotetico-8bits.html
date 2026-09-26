@@ -177,6 +177,7 @@
       <button id="btnOpen">Abrir .asm</button>
       <button id="btnSave">Salvar .asm</button>
       <button id="btnBin">Baixar .bin</button>
+      <button id="btnCopyBin" title="Copia a memória como texto hex (até o último byte diferente de zero)">Copiar Bin</button>
       <input type="file" id="fileInput" accept=".asm,.txt" hidden>
     </div>
     <pre class="errors" id="asmErrors"></pre>
@@ -927,6 +928,41 @@ document.getElementById('btnBin').addEventListener('click', ()=>{
   a.click();
   URL.revokeObjectURL(a.href);
 });
+/* copia a memória como string hex contínua, ex.: 3E01D302CD0600... */
+function copiarTexto(txt){
+  if(navigator.clipboard && window.isSecureContext){
+    return navigator.clipboard.writeText(txt).then(()=>true).catch(()=>copiarTextoFallback(txt));
+  }
+  return Promise.resolve(copiarTextoFallback(txt));
+}
+function copiarTextoFallback(txt){
+  const ta = document.createElement('textarea');
+  ta.value = txt;
+  ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try{ ok = document.execCommand('copy'); }catch(e){}
+  document.body.removeChild(ta);
+  return ok;
+}
+document.getElementById('btnCopyBin').addEventListener('click', async ()=>{
+  const btn = document.getElementById('btnCopyBin');
+  // corta os zeros do final (a memória restante já é zero na máquina)
+  let last = 255;
+  while(last > 0 && cpu.mem[last] === 0) last--;
+  const hex = Array.from(cpu.mem.slice(0, last+1),
+    b => b.toString(16).padStart(2,'0').toUpperCase()).join('');
+  const ok = await copiarTexto(hex);
+  if(!ok){
+    prompt('Não consegui acessar a área de transferência. Copie manualmente:', hex);
+    return;
+  }
+  btn.textContent = 'Copiado! (' + (last+1) + ' bytes)';
+  clearTimeout(btn._t);
+  btn._t = setTimeout(()=>{ btn.textContent = 'Copiar Bin'; }, 1500);
+});
+
 document.getElementById('btnOpen').addEventListener('click', ()=> document.getElementById('fileInput').click());
 document.getElementById('fileInput').addEventListener('change', e=>{
   const file = e.target.files[0];
