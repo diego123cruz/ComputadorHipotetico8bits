@@ -153,6 +153,10 @@
       <span>Volume</span>
       <input type="range" id="volume" min="0" max="100" value="90">
     </div>
+    <label style="display:flex; align-items:center; gap:8px; margin-top:10px; font-size:.75rem; color:var(--muted); cursor:pointer;">
+      <input type="checkbox" id="chkCompat">
+      Modo compatível (iPhone/Safari): tocar pelo elemento &lt;audio&gt; — ligado automaticamente no iOS
+    </label>
     <div class="progress-outer">
       <div class="progress-inner" id="progressBar"></div>
       <div class="progress-lbl" id="progressLbl">parado</div>
@@ -388,7 +392,7 @@ function runSelfTest(segs, header, dataArr){
 
   // usa amplitude cheia (independente do volume escolhido) para o teste,
   // já que aqui o que importa é a forma dos pulsos, não o volume de audição.
-  const sr = ensureCtx().sampleRate;
+  const sr = taxaAtual();
   const samples = renderSamples(segs, 1.0, sr);
   const pulses = extractPulses(samples, sr);
   const result = decodeSelfTest(pulses);
@@ -539,92 +543,86 @@ function buildHeader(start, end, checksum){
 });
 
 /* ============================================================
-   CONTEXTO DE ÁUDIO (robusto para Safari / iPhone)
+   ÁUDIO — robusto para Safari / iPhone
    ============================================================
-   No WebKit (Safari no Mac e todo navegador no iPhone) o
-   AudioContext pode ficar "suspended", "interrupted" ou mudo
-   depois de trocar a saída de áudio (plugar/tirar fone,
-   Bluetooth, ligação, tela bloqueada). Por isso:
-   - antes de tocar, o contexto é validado e, se preciso,
-     descartado e recriado;
-   - o buffer é regerado se o contexto (ou a sampleRate) mudou;
-   - um "watchdog" confere se o relógio do áudio realmente
-     andou depois do start() e tenta de novo uma vez;
-   - a sessão de áudio é marcada como "playback", para o
-     iPhone ignorar a chave de silencioso.
+   Problema conhecido do WebKit no iOS: depois de um tempo com a
+   página parada, o sistema desativa a sessão de áudio e o
+   AudioContext fica "running", com o relógio andando, mas SEM
+   SOM. Nada no JavaScript avisa. Por isso:
+
+   1) Cada reprodução cria um AudioContext NOVO (o anterior é
+      fechado), sempre dentro do toque do usuário.
+   2) No iPhone/iPad o padrão é o "modo compatível": o áudio sai
+      por um elemento <audio> tocando o WAV gerado, que o iOS
+      trata como mídia comum e reativa corretamente a sessão.
+   3) navigator.audioSession.type = 'playback' ignora a chave de
+      silencioso (iOS/Safari 16.4+).
 */
-let ctxInvalido = false;   // marcado quando o sistema troca o dispositivo de saída
-let lastGen = null;        // {segs, header, data, amplitude} da última geração
-let bufferCtx = null;      // contexto para o qual currentBuffer foi gerado
+const SR_AUDIO_EL = 48000;   // taxa nativa do iPhone/Mac para o modo <audio>
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
-try{
-  if(navigator.audioSession) navigator.audioSession.type = 'playback';
-}catch(e){}
+let lastGen = null;          // {segs, header, data, amplitude}
+let audioEl = null;          // elemento <audio> reutilizado (modo compatível)
+let audioElUrl = null;
+let watchdog = null;
 
-if(navigator.mediaDevices && navigator.mediaDevices.addEventListener){
-  navigator.mediaDevices.addEventListener('devicechange', ()=>{ ctxInvalido = true; });
-}
+try{ if(navigator.audioSession) navigator.audioSession.type = 'playback'; }catch(e){}
+
+const chkCompat = document.getElementById('chkCompat');
+chkCompat.checked = IS_IOS;
 
 function setLbl(txt){ document.getElementById('progressLbl').textContent = txt; }
+function setBar(pct){ document.getElementById('progressBar').style.width = pct + '%'; }
+function modoCompat(){ return chkCompat.checked; }
 
-function criarCtx(){
+// taxa usada no autoteste / WAV
+function taxaAtual(){
+  if(modoCompat()) return SR_AUDIO_EL;
+  return audioCtx ? audioCtx.sampleRate : SR_AUDIO_EL;
+}
+
+/* ---------- AudioContext: sempre novo a cada uso ---------- */
+function novoCtx(){
+  // chamado de forma SÍNCRONA dentro do clique (exigência do iOS)
+  if(audioCtx){ const velho = audioCtx; audioCtx = null; try{ velho.close(); }catch(e){} }
   const ctx = new (window.AudioContext||window.webkitAudioContext)();
+  audioCtx = ctx;
+  try{ ctx.resume(); }catch(e){}
+  // "destrava" o iOS tocando 1 amostra de silêncio
+  try{
+    const s = ctx.createBufferSource();
+    s.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+    s.connect(ctx.destination); s.start();
+  }catch(e){}
   ctx.addEventListener('statechange', ()=>{
-    if(ctx !== audioCtx) return;
-    if(ctx.state !== 'running' && (sourceNode || toneOsc)){
-      setLbl('áudio interrompido pelo sistema (' + ctx.state + ') — aperte Reproduzir de novo');
+    if(ctx === audioCtx && ctx.state !== 'running' && (sourceNode || toneOsc)){
+      setLbl('áudio interrompido pelo sistema (' + ctx.state + ') — toque em Reproduzir de novo');
     }
   });
-  // "destrava" o áudio no iOS tocando 1 amostra de silêncio
-  try{
-    const b = ctx.createBuffer(1, 1, ctx.sampleRate);
-    const s = ctx.createBufferSource();
-    s.buffer = b; s.connect(ctx.destination); s.start();
-  }catch(e){}
   return ctx;
 }
 
-// Uso síncrono (só para saber a sampleRate / criar sem tocar)
-function ensureCtx(){
-  if(!audioCtx) audioCtx = criarCtx();
-  return audioCtx;
-}
+// compatibilidade com o código do autoteste
+function ensureCtx(){ return audioCtx || { sampleRate: taxaAtual() }; }
 
-function resumeComTimeout(ctx, ms){
-  return Promise.race([
-    ctx.resume().catch(()=>{}),
-    new Promise(r=>setTimeout(r, ms))
-  ]);
-}
-
-async function descartarCtx(){
-  const velho = audioCtx;
-  audioCtx = null;
-  bufferCtx = null;
-  if(velho){ try{ await velho.close(); }catch(e){} }
-}
-
-// Devolve um contexto que está realmente "running" (recria se preciso)
-async function obterCtxAtivo(){
-  if(ctxInvalido){ ctxInvalido = false; await descartarCtx(); }
-  let ctx = ensureCtx();
-  if(ctx.state !== 'running') await resumeComTimeout(ctx, 400);
-  if(ctx.state !== 'running'){
-    await descartarCtx();
-    ctx = ensureCtx();
-    await resumeComTimeout(ctx, 400);
+/* ---------- WAV ---------- */
+function samplesToWav(samples, sampleRate){
+  const dataSize = samples.length*2;
+  const view = new DataView(new ArrayBuffer(44+dataSize));
+  const w = (o,s)=>{ for(let i=0;i<s.length;i++) view.setUint8(o+i, s.charCodeAt(i)); };
+  w(0,'RIFF'); view.setUint32(4, 36+dataSize, true); w(8,'WAVE');
+  w(12,'fmt '); view.setUint32(16,16,true); view.setUint16(20,1,true);
+  view.setUint16(22,1,true); view.setUint32(24,sampleRate,true);
+  view.setUint32(28,sampleRate*2,true); view.setUint16(32,2,true); view.setUint16(34,16,true);
+  w(36,'data'); view.setUint32(40,dataSize,true);
+  let o=44;
+  for(let i=0;i<samples.length;i++){
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(o, s<0 ? s*0x8000 : s*0x7FFF, true);
+    o+=2;
   }
-  return ctx;
-}
-
-// Gera o AudioBuffer para o contexto atual (usa a taxa REAL dele)
-function gerarBuffer(ctx){
-  const samples = renderSamples(lastGen.segs, lastGen.amplitude, ctx.sampleRate);
-  const buffer = ctx.createBuffer(1, samples.length, ctx.sampleRate);
-  buffer.copyToChannel(samples, 0);
-  currentBuffer = buffer;
-  bufferCtx = ctx;
-  return buffer;
+  return new Blob([view], {type:'audio/wav'});
 }
 
 /* ============================================================
@@ -632,10 +630,10 @@ function gerarBuffer(ctx){
    ============================================================ */
 let toneOsc = null, toneGain = null;
 
-async function playTone(freq){
+function playTone(freq){
   stopTone();
   stopPlayback();
-  const ctx = await obterCtxAtivo();
+  const ctx = novoCtx();
   toneOsc = ctx.createOscillator();
   toneOsc.type = 'square';
   toneOsc.frequency.value = freq;
@@ -660,7 +658,7 @@ document.getElementById('btnTone2k').addEventListener('click', ()=> playTone(F2)
 document.getElementById('btnToneStop').addEventListener('click', stopTone);
 
 /* ============================================================
-   GERAR
+   GERAR (só monta os segmentos; o som é renderizado na hora de tocar)
    ============================================================ */
 document.getElementById('btnGenerate').addEventListener('click', ()=>{
   if(!fileBytes) return;
@@ -673,14 +671,12 @@ document.getElementById('btnGenerate').addEventListener('click', ()=>{
   const header = buildHeader(start, end, sum);
   const segs = buildSegments(header, data);
   const amplitude = (+document.getElementById('volume').value)/100;
-
   lastGen = {segs, header, data, amplitude};
-  const buffer = gerarBuffer(ensureCtx());
 
   document.getElementById('btnPlay').disabled = false;
   document.getElementById('btnWav').disabled = false;
-  setLbl('pronto — ' + buffer.duration.toFixed(1) + ' s');
-  document.getElementById('progressBar').style.width = '0%';
+  setLbl('pronto — ' + segmentsDuration(segs).toFixed(1) + ' s');
+  setBar(0);
 
   runSelfTest(segs, header, data);
 });
@@ -688,26 +684,52 @@ document.getElementById('btnGenerate').addEventListener('click', ()=>{
 /* ============================================================
    REPRODUZIR
    ============================================================ */
-let watchdog = null;
+let duracaoAtual = 0;
 
-async function tocar(tentativa){
+function tocar(){
   if(!lastGen) return;
   stopTone();
   stopPlayback();
+  if(modoCompat()) tocarAudioEl(); else tocarWebAudio(0);
+}
 
-  const ctx = await obterCtxAtivo();
-  if(ctx.state !== 'running'){
-    setLbl('o navegador não liberou o áudio (' + ctx.state + ') — toque em Reproduzir de novo');
-    return;
+/* ---------- modo compatível: elemento <audio> ---------- */
+function tocarAudioEl(){
+  if(!audioEl){
+    audioEl = new Audio();
+    audioEl.preload = 'auto';
+    audioEl.setAttribute('playsinline', '');
+    audioEl.addEventListener('ended', ()=>{
+      setLbl('concluído'); setBar(100);
+      document.getElementById('btnStop').disabled = true;
+      if(rafHandle) cancelAnimationFrame(rafHandle);
+    });
   }
+  const samples = renderSamples(lastGen.segs, lastGen.amplitude, SR_AUDIO_EL);
+  if(audioElUrl) URL.revokeObjectURL(audioElUrl);
+  audioElUrl = URL.createObjectURL(samplesToWav(samples, SR_AUDIO_EL));
+  duracaoAtual = samples.length / SR_AUDIO_EL;
+  audioEl.src = audioElUrl;
+  audioEl.currentTime = 0;
+  const p = audioEl.play();   // chamado ainda dentro do toque
+  document.getElementById('btnStop').disabled = false;
+  if(p && p.catch) p.catch(err=>{
+    setLbl('o iPhone bloqueou o áudio (' + err.name + ') — toque em Reproduzir de novo');
+    document.getElementById('btnStop').disabled = true;
+  });
+  updateProgress();
+}
 
-  // contexto novo (ou taxa diferente) => regera o buffer na taxa atual
-  if(bufferCtx !== ctx || !currentBuffer || currentBuffer.sampleRate !== ctx.sampleRate){
-    gerarBuffer(ctx);
-  }
+/* ---------- modo Web Audio ---------- */
+function tocarWebAudio(tentativa){
+  const ctx = novoCtx();   // SEMPRE um contexto novo
+  const samples = renderSamples(lastGen.segs, lastGen.amplitude, ctx.sampleRate);
+  const buffer = ctx.createBuffer(1, samples.length, ctx.sampleRate);
+  buffer.copyToChannel(samples, 0);
+  duracaoAtual = buffer.duration;
 
   const node = ctx.createBufferSource();
-  node.buffer = currentBuffer;
+  node.buffer = buffer;
   node.connect(ctx.destination);
   node.onended = ()=>{
     if(sourceNode !== node) return;
@@ -722,24 +744,19 @@ async function tocar(tentativa){
   document.getElementById('btnStop').disabled = false;
   updateProgress();
 
-  // watchdog: se o relógio do áudio não andou, o contexto está "morto"
+  // watchdog: relógio parado => contexto morto, tenta mais uma vez
   clearTimeout(watchdog);
-  watchdog = setTimeout(async ()=>{
+  watchdog = setTimeout(()=>{
     if(sourceNode !== node) return;
     if(ctx.currentTime - playStartTime < 0.05){
-      if(tentativa < 1){
-        setLbl('áudio travado — recriando contexto...');
-        ctxInvalido = true;
-        tocar(tentativa + 1);
-      } else {
-        stopPlayback();
-        setLbl('o áudio não saiu — tire/coloque o fone ou recarregue a página');
-      }
+      stopPlayback();
+      if(tentativa < 1){ tocarWebAudio(tentativa + 1); }
+      else setLbl('o áudio não saiu — ative o "modo compatível" e tente de novo');
     }
   }, 700);
 }
 
-document.getElementById('btnPlay').addEventListener('click', ()=> tocar(0));
+document.getElementById('btnPlay').addEventListener('click', tocar);
 document.getElementById('btnStop').addEventListener('click', stopPlayback);
 
 function stopPlayback(){
@@ -749,56 +766,39 @@ function stopPlayback(){
     sourceNode = null;
     try{ n.onended = null; n.stop(); }catch(e){}
   }
+  if(audioEl && !audioEl.paused){
+    audioEl.pause();
+    try{ audioEl.currentTime = 0; }catch(e){}
+  }
   if(rafHandle) cancelAnimationFrame(rafHandle);
   document.getElementById('btnStop').disabled = true;
-  document.getElementById('progressBar').style.width = '0%';
+  setBar(0);
   setLbl('parado');
 }
 
 function updateProgress(){
-  if(!sourceNode || !currentBuffer || !audioCtx) return;
-  const elapsed = Math.max(0, audioCtx.currentTime - playStartTime);
-  const pct = Math.min(100, (elapsed/currentBuffer.duration)*100);
-  document.getElementById('progressBar').style.width = pct + '%';
-  if(audioCtx.state === 'running'){
-    setLbl(elapsed.toFixed(1) + ' / ' + currentBuffer.duration.toFixed(1) + ' s');
-  }
+  let elapsed;
+  if(audioEl && !audioEl.paused) elapsed = audioEl.currentTime;
+  else if(sourceNode && audioCtx) elapsed = Math.max(0, audioCtx.currentTime - playStartTime);
+  else return;
+  const pct = Math.min(100, (elapsed/duracaoAtual)*100);
+  setBar(pct);
+  setLbl(elapsed.toFixed(1) + ' / ' + duracaoAtual.toFixed(1) + ' s');
   if(pct < 100) rafHandle = requestAnimationFrame(updateProgress);
 }
 
 /* ============================================================
    EXPORTAR .WAV
    ============================================================ */
-function bufferToWav(buffer){
-  const samples = buffer.getChannelData(0);
-  const sampleRate = buffer.sampleRate;
-  const blockAlign = 2, byteRate = sampleRate*blockAlign;
-  const dataSize = samples.length*2;
-  const arr = new ArrayBuffer(44+dataSize);
-  const view = new DataView(arr);
-  function writeStr(offset,str){ for(let i=0;i<str.length;i++) view.setUint8(offset+i, str.charCodeAt(i)); }
-  writeStr(0,'RIFF'); view.setUint32(4, 36+dataSize, true); writeStr(8,'WAVE');
-  writeStr(12,'fmt '); view.setUint32(16,16,true); view.setUint16(20,1,true);
-  view.setUint16(22,1,true); view.setUint32(24,sampleRate,true);
-  view.setUint32(28,byteRate,true); view.setUint16(32,blockAlign,true); view.setUint16(34,16,true);
-  writeStr(36,'data'); view.setUint32(40,dataSize,true);
-  let offset=44;
-  for(let i=0;i<samples.length;i++){
-    const s = Math.max(-1, Math.min(1, samples[i]));
-    view.setInt16(offset, s<0 ? s*0x8000 : s*0x7FFF, true);
-    offset += 2;
-  }
-  return new Blob([view], {type:'audio/wav'});
-}
-
 document.getElementById('btnWav').addEventListener('click', ()=>{
-  if(!currentBuffer) return;
-  const blob = bufferToWav(currentBuffer);
+  if(!lastGen) return;
+  const sr = taxaAtual();
+  const blob = samplesToWav(renderSamples(lastGen.segs, lastGen.amplitude, sr), sr);
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'tape.wav';
   a.click();
-  URL.revokeObjectURL(a.href);
+  setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
 });
 </script>
 </body>
