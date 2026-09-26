@@ -539,11 +539,92 @@ function buildHeader(start, end, checksum){
 });
 
 /* ============================================================
-   GERAÇÃO / REPRODUÇÃO
-   ============================================================ */
+   CONTEXTO DE ÁUDIO (robusto para Safari / iPhone)
+   ============================================================
+   No WebKit (Safari no Mac e todo navegador no iPhone) o
+   AudioContext pode ficar "suspended", "interrupted" ou mudo
+   depois de trocar a saída de áudio (plugar/tirar fone,
+   Bluetooth, ligação, tela bloqueada). Por isso:
+   - antes de tocar, o contexto é validado e, se preciso,
+     descartado e recriado;
+   - o buffer é regerado se o contexto (ou a sampleRate) mudou;
+   - um "watchdog" confere se o relógio do áudio realmente
+     andou depois do start() e tenta de novo uma vez;
+   - a sessão de áudio é marcada como "playback", para o
+     iPhone ignorar a chave de silencioso.
+*/
+let ctxInvalido = false;   // marcado quando o sistema troca o dispositivo de saída
+let lastGen = null;        // {segs, header, data, amplitude} da última geração
+let bufferCtx = null;      // contexto para o qual currentBuffer foi gerado
+
+try{
+  if(navigator.audioSession) navigator.audioSession.type = 'playback';
+}catch(e){}
+
+if(navigator.mediaDevices && navigator.mediaDevices.addEventListener){
+  navigator.mediaDevices.addEventListener('devicechange', ()=>{ ctxInvalido = true; });
+}
+
+function setLbl(txt){ document.getElementById('progressLbl').textContent = txt; }
+
+function criarCtx(){
+  const ctx = new (window.AudioContext||window.webkitAudioContext)();
+  ctx.addEventListener('statechange', ()=>{
+    if(ctx !== audioCtx) return;
+    if(ctx.state !== 'running' && (sourceNode || toneOsc)){
+      setLbl('áudio interrompido pelo sistema (' + ctx.state + ') — aperte Reproduzir de novo');
+    }
+  });
+  // "destrava" o áudio no iOS tocando 1 amostra de silêncio
+  try{
+    const b = ctx.createBuffer(1, 1, ctx.sampleRate);
+    const s = ctx.createBufferSource();
+    s.buffer = b; s.connect(ctx.destination); s.start();
+  }catch(e){}
+  return ctx;
+}
+
+// Uso síncrono (só para saber a sampleRate / criar sem tocar)
 function ensureCtx(){
-  if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  if(!audioCtx) audioCtx = criarCtx();
   return audioCtx;
+}
+
+function resumeComTimeout(ctx, ms){
+  return Promise.race([
+    ctx.resume().catch(()=>{}),
+    new Promise(r=>setTimeout(r, ms))
+  ]);
+}
+
+async function descartarCtx(){
+  const velho = audioCtx;
+  audioCtx = null;
+  bufferCtx = null;
+  if(velho){ try{ await velho.close(); }catch(e){} }
+}
+
+// Devolve um contexto que está realmente "running" (recria se preciso)
+async function obterCtxAtivo(){
+  if(ctxInvalido){ ctxInvalido = false; await descartarCtx(); }
+  let ctx = ensureCtx();
+  if(ctx.state !== 'running') await resumeComTimeout(ctx, 400);
+  if(ctx.state !== 'running'){
+    await descartarCtx();
+    ctx = ensureCtx();
+    await resumeComTimeout(ctx, 400);
+  }
+  return ctx;
+}
+
+// Gera o AudioBuffer para o contexto atual (usa a taxa REAL dele)
+function gerarBuffer(ctx){
+  const samples = renderSamples(lastGen.segs, lastGen.amplitude, ctx.sampleRate);
+  const buffer = ctx.createBuffer(1, samples.length, ctx.sampleRate);
+  buffer.copyToChannel(samples, 0);
+  currentBuffer = buffer;
+  bufferCtx = ctx;
+  return buffer;
 }
 
 /* ============================================================
@@ -551,11 +632,10 @@ function ensureCtx(){
    ============================================================ */
 let toneOsc = null, toneGain = null;
 
-function playTone(freq){
+async function playTone(freq){
   stopTone();
   stopPlayback();
-  const ctx = ensureCtx();
-  if(ctx.state === 'suspended') ctx.resume();
+  const ctx = await obterCtxAtivo();
   toneOsc = ctx.createOscillator();
   toneOsc.type = 'square';
   toneOsc.frequency.value = freq;
@@ -579,6 +659,9 @@ document.getElementById('btnTone1k').addEventListener('click', ()=> playTone(F1)
 document.getElementById('btnTone2k').addEventListener('click', ()=> playTone(F2));
 document.getElementById('btnToneStop').addEventListener('click', stopTone);
 
+/* ============================================================
+   GERAR
+   ============================================================ */
 document.getElementById('btnGenerate').addEventListener('click', ()=>{
   if(!fileBytes) return;
   const start = parseHexByte(document.getElementById('startInput').value, 0);
@@ -591,60 +674,95 @@ document.getElementById('btnGenerate').addEventListener('click', ()=>{
   const segs = buildSegments(header, data);
   const amplitude = (+document.getElementById('volume').value)/100;
 
-  const ctx = ensureCtx();
-  const sr = ctx.sampleRate; // usa a taxa REAL do dispositivo, nunca um valor fixo
-  const samples = renderSamples(segs, amplitude, sr);
-  const buffer = ctx.createBuffer(1, samples.length, sr);
-  buffer.copyToChannel(samples, 0);
-  currentBuffer = buffer;
+  lastGen = {segs, header, data, amplitude};
+  const buffer = gerarBuffer(ensureCtx());
 
   document.getElementById('btnPlay').disabled = false;
   document.getElementById('btnWav').disabled = false;
-  document.getElementById('progressLbl').textContent = 'pronto — ' + buffer.duration.toFixed(1) + ' s';
+  setLbl('pronto — ' + buffer.duration.toFixed(1) + ' s');
   document.getElementById('progressBar').style.width = '0%';
 
   runSelfTest(segs, header, data);
 });
 
-document.getElementById('btnPlay').addEventListener('click', ()=>{
-  if(!currentBuffer) return;
-  const ctx = ensureCtx();
-  if(ctx.state === 'suspended') ctx.resume();
+/* ============================================================
+   REPRODUZIR
+   ============================================================ */
+let watchdog = null;
+
+async function tocar(tentativa){
+  if(!lastGen) return;
   stopTone();
   stopPlayback();
-  sourceNode = ctx.createBufferSource();
-  sourceNode.buffer = currentBuffer;
-  sourceNode.connect(ctx.destination);
-  sourceNode.onended = ()=>{
-    document.getElementById('progressLbl').textContent = 'concluído';
+
+  const ctx = await obterCtxAtivo();
+  if(ctx.state !== 'running'){
+    setLbl('o navegador não liberou o áudio (' + ctx.state + ') — toque em Reproduzir de novo');
+    return;
+  }
+
+  // contexto novo (ou taxa diferente) => regera o buffer na taxa atual
+  if(bufferCtx !== ctx || !currentBuffer || currentBuffer.sampleRate !== ctx.sampleRate){
+    gerarBuffer(ctx);
+  }
+
+  const node = ctx.createBufferSource();
+  node.buffer = currentBuffer;
+  node.connect(ctx.destination);
+  node.onended = ()=>{
+    if(sourceNode !== node) return;
+    sourceNode = null;
+    setLbl('concluído');
     document.getElementById('btnStop').disabled = true;
     if(rafHandle) cancelAnimationFrame(rafHandle);
   };
-  sourceNode.start();
+  sourceNode = node;
+  node.start();
   playStartTime = ctx.currentTime;
   document.getElementById('btnStop').disabled = false;
   updateProgress();
-});
 
+  // watchdog: se o relógio do áudio não andou, o contexto está "morto"
+  clearTimeout(watchdog);
+  watchdog = setTimeout(async ()=>{
+    if(sourceNode !== node) return;
+    if(ctx.currentTime - playStartTime < 0.05){
+      if(tentativa < 1){
+        setLbl('áudio travado — recriando contexto...');
+        ctxInvalido = true;
+        tocar(tentativa + 1);
+      } else {
+        stopPlayback();
+        setLbl('o áudio não saiu — tire/coloque o fone ou recarregue a página');
+      }
+    }
+  }, 700);
+}
+
+document.getElementById('btnPlay').addEventListener('click', ()=> tocar(0));
 document.getElementById('btnStop').addEventListener('click', stopPlayback);
 
 function stopPlayback(){
+  clearTimeout(watchdog);
   if(sourceNode){
-    try{ sourceNode.onended = null; sourceNode.stop(); }catch(e){}
+    const n = sourceNode;
     sourceNode = null;
+    try{ n.onended = null; n.stop(); }catch(e){}
   }
   if(rafHandle) cancelAnimationFrame(rafHandle);
   document.getElementById('btnStop').disabled = true;
   document.getElementById('progressBar').style.width = '0%';
-  document.getElementById('progressLbl').textContent = 'parado';
+  setLbl('parado');
 }
 
 function updateProgress(){
-  if(!sourceNode || !currentBuffer) return;
-  const elapsed = audioCtx.currentTime - playStartTime;
+  if(!sourceNode || !currentBuffer || !audioCtx) return;
+  const elapsed = Math.max(0, audioCtx.currentTime - playStartTime);
   const pct = Math.min(100, (elapsed/currentBuffer.duration)*100);
   document.getElementById('progressBar').style.width = pct + '%';
-  document.getElementById('progressLbl').textContent = elapsed.toFixed(1) + ' / ' + currentBuffer.duration.toFixed(1) + ' s';
+  if(audioCtx.state === 'running'){
+    setLbl(elapsed.toFixed(1) + ' / ' + currentBuffer.duration.toFixed(1) + ' s');
+  }
   if(pct < 100) rafHandle = requestAnimationFrame(updateProgress);
 }
 
